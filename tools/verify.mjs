@@ -641,9 +641,13 @@ async function run() {
   /* Cancelled flights are on screen here, so this is the one moment the
      cancellation-reason column has something to show. BTS stores a letter; the
      column is declared as a lookup so the reader sees the word BTS defines. */
-  check(/Weather|Carrier|National Air System|Security/.test(groupedState.text),
+  /* "Carrier" is also a column heading, so matching it would pass on the
+     header row alone. "Weather" and "National Air System" appear nowhere but
+     in a cancellation-reason cell. */
+  const reason = /Weather|National Air System/.exec(groupedState.text);
+  check(reason !== null,
     'the cancellation reason renders as BTS\'s word, not its raw letter',
-    groupedState.text.slice(0, 80));
+    reason ? `found "${reason[0]}"` : groupedState.text.slice(0, 100));
 
   /*
    * A filter that leaves nothing measurable must empty every chart, not leave
