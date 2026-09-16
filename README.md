@@ -23,7 +23,28 @@ can answer anything.
 Measured on a range-capable local server, by the server, because DuckDB reads
 inside a worker and nothing in the page can see those requests:
 
-<!-- RANGE-TABLE -->
+| | HTTP requests | Bytes read | Share of the 14.67 MB file |
+|---|---|---|---|
+| Opening the file and fetching the first page of rows with its count | 5 (3 answered 206, 2 HEAD) | 66 KB | **0.4%** |
+| The whole first paint — that page, plus the six whole-set queries behind the tiles and the charts | 177 (168 answered 206) | 6.18 MB | **42.1%** |
+| One filtered query (`arr_delay >= 60`) and everything it recomputes | 214 (206 answered 206) | 7.53 MB | **51.3%** |
+
+Not one whole-file `GET` in any of them.
+
+Measured 2026-09-16 by `tools/serve.mjs` during a headless-Chrome run, and kept in
+[`data/range-measurement.json`](data/range-measurement.json), which the published page falls back to.
+`node tools/verify.mjs --record` re-measures and rewrites it.
+
+Those three numbers are very different, and all three are quoted. Paging the table is nearly
+free: the engine reads the footer, the metadata, and the column chunks of one row group — 66 KB
+to open a 14.67 MB file and put 200 rows on screen. The whole-set statistics cost far more,
+because a `quantile_cont` over every matching row has to read that column across all twelve row
+groups. That is the trade this demo is actually making, and quoting only the first number would
+be the flattering third of it.
+
+What the sort and the row groups buy is pruning: a filter on `flight_date` can only touch the
+groups whose recorded min/max fail to rule it out, and on a file sorted by date that is a handful
+of the twelve rather than all of them.
 
 The published site is GitHub Pages, which answers `206 Partial Content` the same
 way; `node tools/verify.mjs --live` asks it for a byte range and checks that it

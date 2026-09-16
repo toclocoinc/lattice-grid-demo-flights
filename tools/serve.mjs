@@ -133,7 +133,7 @@ export function startServer(port = 0) {
           'accept-ranges': 'bytes',
           'cache-control': 'no-store',
         }).end();
-        record(200, 0, 'HEAD');
+        record('HEAD', 0, 'HEAD');
         return;
       }
 
@@ -180,14 +180,22 @@ export function startServer(port = 0) {
   });
 }
 
-/** The tally, per file: how many requests, how many were 206, and how much came back. */
+/**
+ * The tally, per file: how many requests, how many were answered 206, how many
+ * were a HEAD (a size probe, no body), and how many bytes actually came back.
+ *
+ * A HEAD is counted apart from a 200 on purpose: it returns no body, so rolling
+ * it in with the whole-file reads would report full downloads that never
+ * happened.
+ */
 export function summarise(log) {
   const files = {};
   for (const entry of log) {
-    const f = (files[entry.path] ||= { path: entry.path, size: entry.size, requests: 0, partial: 0, whole: 0, bytes: 0, ranges: [] });
+    const f = (files[entry.path] ||= { path: entry.path, size: entry.size, requests: 0, partial: 0, whole: 0, head: 0, bytes: 0, ranges: [] });
     f.requests += 1;
     if (entry.status === 206) f.partial += 1;
-    if (entry.status === 200) f.whole += 1;
+    else if (entry.status === 200) f.whole += 1;
+    else if (entry.status === 'HEAD') f.head += 1;
     f.bytes += entry.bytes;
     if (entry.range) f.ranges.push(entry.range);
   }

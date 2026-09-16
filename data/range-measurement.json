@@ -1,0 +1,32 @@
+{
+  "file": "data/flights-2026-06.parquet",
+  "size": 15383215,
+  "pageOnly": {
+    "label": "opening the file and fetching the first page of rows with its count",
+    "requests": 5,
+    "partial": 3,
+    "head": 2,
+    "bytes": 67899,
+    "percentOfFile": 0.4
+  },
+  "firstPaint": {
+    "label": "the whole first paint: that page, plus the six whole-set queries behind the tiles and the charts",
+    "requests": 177,
+    "partial": 168,
+    "head": 9,
+    "bytes": 6481736,
+    "percentOfFile": 42.1
+  },
+  "filtered": {
+    "label": "one filtered query and everything it recomputes",
+    "query": "arr_delay >= 60",
+    "requests": 214,
+    "partial": 206,
+    "head": 8,
+    "bytes": 7893413,
+    "percentOfFile": 51.3
+  },
+  "measuredOn": "2026-09-16",
+  "measuredBy": "tools/serve.mjs, in a headless Chrome run against this file. Regenerate with: node tools/verify.mjs --record",
+  "note": "Counted by the server that served the file. DuckDB reads inside a worker, so nothing in the page can observe these requests. GitHub Pages answers 206 the same way."
+}

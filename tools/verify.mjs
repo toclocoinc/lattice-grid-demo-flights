@@ -635,6 +635,7 @@ async function run() {
     check(firstPaintFile != null, 'the server saw the Parquet file being read');
     if (firstPaintFile && filteredFile) {
       check(firstPaintFile.partial > 0, 'the first paint used range requests', `${firstPaintFile.partial} of ${firstPaintFile.requests} were 206`);
+      check((firstPaintFile.whole ?? 0) === 0, 'and never fell back to a whole-file GET', `${firstPaintFile.whole} whole-body responses`);
       check(firstPaintFile.bytes < size,
         'the first paint did NOT download the file',
         `${mb(firstPaintFile.bytes)} of ${mb(size)} — ${firstPaintFile.percentOfFile}%`);
@@ -645,6 +646,7 @@ async function run() {
         label,
         requests: file.requests,
         partial: file.partial,
+        head: file.head ?? 0,
         bytes: file.bytes,
         percentOfFile: file.percentOfFile,
       });
@@ -660,8 +662,8 @@ async function run() {
         measuredOn: new Date().toISOString().slice(0, 10),
         note: 'Measured by tools/serve.mjs, which records every request for a file under data/. GitHub Pages answers 206 the same way.',
       };
-      const line = (name, file) => `  ${name.padEnd(22)} ${String(file.requests).padStart(4)} requests, ${String(file.partial).padStart(4)} of them 206, `
-        + `${mb(file.bytes).padStart(9)} of ${mb(size)} = ${String(file.percentOfFile).padStart(5)}% of the file`;
+      const line = (name, file) => `  ${name.padEnd(22)} ${String(file.requests).padStart(4)} requests, ${String(file.partial).padStart(4)} answered 206, `
+        + `${String(file.head ?? 0).padStart(2)} HEAD, ${mb(file.bytes).padStart(9)} of ${mb(size)} = ${String(file.percentOfFile).padStart(5)}% of the file`;
       console.log('\nRange reads, measured by the server that served the file:');
       console.log(line('first paint', firstPaintFile));
       if (pageFile) console.log(line('one page of rows', pageFile));
