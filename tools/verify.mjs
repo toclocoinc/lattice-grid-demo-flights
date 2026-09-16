@@ -113,7 +113,12 @@ async function nodeAnswers(filterSql) {
   const db = await DuckDBInstance.create(':memory:');
   const conn = await db.connect();
   const file = join(root, PARQUET).replaceAll("'", "''");
-  const from = `read_parquet('${file}')${filterSql ? ` WHERE ${filterSql}` : ''}`;
+  /* A parenthesised subquery, not a trailing WHERE: one of the queries below
+     adds a WHERE of its own, and two of them in one statement is a parse
+     error. This way every query can filter further without knowing whether a
+     filter is already in force. */
+  const base = `read_parquet('${file}')`;
+  const from = filterSql ? `(SELECT * FROM ${base} WHERE ${filterSql})` : base;
   const one = async (sql) => {
     const result = await conn.runAndReadAll(sql);
     return result.getRowObjects()[0];
