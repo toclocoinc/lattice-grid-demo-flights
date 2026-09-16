@@ -109,6 +109,26 @@ export function recordingConnection(connection, record) {
 }
 
 /**
+ * Whether the byte-accounting endpoint can exist at all.
+ *
+ * `/__ranges` is served by `tools/serve.mjs` and by nothing else. Asking a
+ * static host for it is not a harmless miss: GitHub Pages answers the POST
+ * with 405 and the GET with 404, and a browser writes both into the console as
+ * errors. A demo that claims to run without errors cannot be the thing putting
+ * two of them there, and a check that insists on zero console errors is only
+ * worth having if the page does not manufacture them.
+ *
+ * So the endpoint is asked for only where it can answer. Anywhere else the page
+ * falls back to `data/range-measurement.json` and says that it is a recorded
+ * measurement rather than a live one — which it already did, correctly; it just
+ * made two doomed requests first.
+ */
+const hasRangeAccounting = () => (
+  location.protocol !== 'file:'
+  && ['localhost', '127.0.0.1', '[::1]', '::1'].includes(location.hostname)
+);
+
+/**
  * The byte accounting, read back from the server that served the file.
  *
  * DuckDB reads inside a worker, through its own HTTP filesystem, so nothing in
@@ -118,13 +138,10 @@ export function recordingConnection(connection, record) {
  * count is kept. `tools/serve.mjs` records every request for a file under
  * `data/` and serves the tally at `/__ranges`.
  *
- * On GitHub Pages there is no such endpoint — Pages answers 206 but keeps no
- * log a visitor can read — so this resolves to null and the page falls back to
- * the measurement recorded in `data/range-measurement.json`.
- *
- * @returns {Promise<object|null>}
+ * @returns {Promise<object|null>} null wherever no such server is listening
  */
 export async function readRangeAccounting() {
+  if (!hasRangeAccounting()) return null;
   try {
     const response = await fetch('./__ranges', { cache: 'no-store' });
     if (!response.ok) return null;
@@ -137,6 +154,7 @@ export async function readRangeAccounting() {
 
 /** Clear the server's range tally, so the next measurement starts from zero. */
 export async function resetRangeAccounting() {
+  if (!hasRangeAccounting()) return false;
   try {
     await fetch('./__ranges', { method: 'POST', cache: 'no-store' });
     return true;

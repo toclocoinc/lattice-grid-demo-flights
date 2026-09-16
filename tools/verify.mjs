@@ -57,6 +57,20 @@ const liveUrl = live
 
 const PARQUET = 'data/flights-2026-06.parquet';
 
+/* The published check is the one people look at the screenshots of, so it runs
+   at a size worth looking at. */
+const VIEWPORT = live ? { width: 1920, height: 1200 } : { width: 1500, height: 1000 };
+
+/*
+ * How long to wait, relative to the local run.
+ *
+ * Against localhost the engine's range reads cost a memory copy. Against
+ * GitHub Pages every one of them is an HTTPS round trip, and a whole-set
+ * statistic is a few hundred of them. The work is identical; only the wire is
+ * different, so the right response is patience, not a smaller claim.
+ */
+const PATIENCE = live ? 6 : 1;
+
 const CHROME_CANDIDATES = [
   process.env.CHROME_PATH,
   '/usr/bin/google-chrome',
@@ -240,7 +254,7 @@ async function run() {
     '--disable-gpu',
     '--disable-dev-shm-usage',
     '--hide-scrollbars',
-    '--window-size=1500,1000',
+    `--window-size=${VIEWPORT.width},${VIEWPORT.height}`,
     'about:blank',
   ], { stdio: ['ignore', 'pipe', 'pipe'], detached: true });
   browserPid = browser.pid;
@@ -266,6 +280,12 @@ async function run() {
   const pending = new Map();
   let consoleErrors = [];
   let pageErrors = [];
+  /* Requests for the Parquet file, as the browser saw them. Declared before the
+     message handler because the handler fills them. */
+  let wireEntries = [];
+  const wirePending = new Map();
+  const networkFor = () => wirePending;
+  const wireLog = () => wireEntries;
 
   socket.onclose = () => {
     for (const { reject } of pending.values()) reject(new Error('the browser went away before it answered'));
@@ -290,6 +310,43 @@ async function run() {
     if (message.method === 'Log.entryAdded' && message.params.entry.level === 'error') {
       consoleErrors.push(message.params.entry.text);
     }
+    /* A newly attached target (the DuckDB worker) reports nothing until its own
+       Network domain is on. */
+    if (message.method === 'Target.attachedToTarget') {
+      const child = message.params.sessionId;
+      socket.send(JSON.stringify({ id: ++nextId, method: 'Network.enable', params: {}, sessionId: child }));
+      socket.send(JSON.stringify({ id: ++nextId, method: 'Runtime.runIfWaitingForDebugger', params: {}, sessionId: child }));
+    }
+    if (message.method === 'Network.requestWillBeSent') {
+      const { requestId, request } = message.params;
+      if (/\.parquet(\?|$)/.test(request.url)) {
+        const headers = request.headers || {};
+        const range = headers.Range ?? headers.range ?? null;
+        networkFor().set(requestId, { url: request.url, range, method: request.method, status: null, bytes: 0 });
+      }
+    }
+    if (message.method === 'Network.responseReceived') {
+      const entry = networkFor().get(message.params.requestId);
+      if (entry) entry.status = message.params.response.status;
+    }
+    if (message.method === 'Network.loadingFailed') {
+      const entry = networkFor().get(message.params.requestId);
+      if (entry) {
+        entry.status = 'FAILED';
+        entry.errorText = message.params.errorText;
+        entry.blockedReason = message.params.blockedReason ?? null;
+        networkFor().delete(message.params.requestId);
+        wireLog().push(entry);
+      }
+    }
+    if (message.method === 'Network.loadingFinished') {
+      const entry = networkFor().get(message.params.requestId);
+      if (entry) {
+        entry.bytes = message.params.encodedDataLength ?? 0;
+        networkFor().delete(message.params.requestId);
+        wireLog().push(entry);
+      }
+    }
   };
 
   const send = (method, params = {}, sessionId) => new Promise((ok, reject) => {
@@ -305,7 +362,20 @@ async function run() {
   await call('Page.enable');
   await call('Runtime.enable');
   await call('Log.enable');
-  await call('Emulation.setDeviceMetricsOverride', { width: 1500, height: 1000, deviceScaleFactor: 1, mobile: false });
+  await call('Emulation.setDeviceMetricsOverride', { ...VIEWPORT, deviceScaleFactor: 1, mobile: false });
+
+  /*
+   * Watch the wire, including the worker's.
+   *
+   * On a local server the byte accounting comes from the server, which is the
+   * honest place to count. Against GitHub Pages there is no such server, and
+   * DuckDB does its reading inside a worker, so nothing on the page can see
+   * those requests either. The browser can: auto-attaching to the worker target
+   * and enabling Network on it reports every request DuckDB makes, with its
+   * Range header, its status, and the bytes that came back.
+   */
+  await call('Network.enable');
+  await call('Target.setAutoAttach', { autoAttach: true, waitForDebuggerOnStart: false, flatten: true });
 
   const evaluate = async (expression, ms = 30000) => {
     const result = await Promise.race([
@@ -342,14 +412,50 @@ async function run() {
   served?.reset();
   consoleErrors = [];
   pageErrors = [];
+  wireEntries = [];
   await call('Page.navigate', { url: `${origin}/` });
-  await waitFor('!!window.__flightsDemo', 180000, 'the page to report in');
+  await waitFor('!!window.__flightsDemo', 180000 * PATIENCE, 'the page to report in');
   const state = await evaluate('({ ready: window.__flightsDemo.ready, error: window.__flightsDemo.error || null })');
   if (!state.ready) throw new Error(`the page reported a failure: ${state.error}`);
-  await waitFor('window.__flightsDemo.grid && window.__flightsDemo.grid.rows.count() > 0', 90000, 'rows');
+  await waitFor('window.__flightsDemo.grid && window.__flightsDemo.grid.rows.count() > 0', 90000 * PATIENCE, 'rows');
   /* The aggregates land a moment after the first page of rows. */
-  await waitFor('window.__flightsDemo.headline && window.__flightsDemo.headline.flights != null', 60000, 'the whole-set figures');
+  try {
+    await waitFor('window.__flightsDemo.headline && window.__flightsDemo.headline.flights != null', 60000 * PATIENCE, 'the whole-set figures');
+  } catch (error) {
+    /* Say what the page was actually doing when the patience ran out, and keep
+       a picture of it. A timeout with no diagnosis is not a finding. */
+    const stuck = await evaluate(`(() => {
+      const d = window.__flightsDemo || {};
+      return {
+        ready: d.ready, error: d.error || null,
+        rows: d.grid ? d.grid.rows.count() : null,
+        match: d.matchCount, headline: d.headline || null,
+        charts: d.chartGrids ? Object.keys(d.chartGrids).length : 0,
+        bootMs: d.bootMs, rangeSource: d.rangeSource,
+        sqlSeen: (document.querySelector('[data-plan-sql]') || {}).textContent || '',
+      };
+    })()`).catch((e) => ({ unreadable: String(e.message) }));
+    console.log(`\nThe page did not settle. What it was doing:\n${JSON.stringify(stuck, null, 2)}`);
+    console.log(`Console errors so far: ${JSON.stringify(consoleErrors.slice(0, 8))}`);
+    console.log(`Page errors so far: ${JSON.stringify(pageErrors.slice(0, 8))}`);
+    console.log(`\nParquet requests that COMPLETED (${wireEntries.length}, `
+      + `${mb(wireEntries.reduce((n, e) => n + (e.bytes || 0), 0))}):`);
+    for (const e of wireEntries.slice(0, 14)) {
+      console.log(`  ${String(e.status).padStart(6)}  range=${e.range ?? '(none)'}  ${e.bytes} bytes`
+        + (e.errorText ? `  errorText=${e.errorText}` : '') + (e.blockedReason ? `  blocked=${e.blockedReason}` : ''));
+    }
+    const stillOpen = [...wirePending.values()];
+    console.log(`Parquet requests still UNANSWERED (${stillOpen.length}):`);
+    for (const e of stillOpen.slice(0, 14)) {
+      console.log(`  pending  range=${e.range ?? '(none)'}  status=${e.status ?? 'none yet'}`);
+    }
+    await shoot('timed-out');
+    throw error;
+  }
 
+  /* Everything the browser fetched of the Parquet file up to the moment the
+     page declared itself ready. */
+  const firstPaintWire = wireEntries.slice();
   const firstPaintRanges = served ? served.ranges() : null;
   const firstPaintFile = firstPaintRanges?.files?.find((f) => f.path.endsWith('.parquet')) ?? null;
 
@@ -681,8 +787,24 @@ async function run() {
   let measurement = null;
 
   if (live) {
-    /* GitHub Pages keeps no log this can read, so ask it directly whether it
-       serves ranges, which is the fact the page's claim depends on. */
+    /* The byte accounting, as the BROWSER saw it against Pages. */
+    const parquetWire = firstPaintWire.filter((e) => e.method !== 'HEAD');
+    const partial = parquetWire.filter((e) => e.status === 206);
+    const whole = parquetWire.filter((e) => e.status === 200);
+    const withRange = parquetWire.filter((e) => e.range);
+    const bytes = parquetWire.reduce((sum, e) => sum + (e.bytes || 0), 0);
+    const share = Number(((bytes / size) * 100).toFixed(1));
+    console.log('\nRange reads against the published host, as the browser reported them:');
+    console.log(`  first paint             ${parquetWire.length} requests for the Parquet file, `
+      + `${withRange.length} carried a Range header, ${partial.length} answered 206, ${whole.length} answered 200, `
+      + `${mb(bytes)} of ${mb(size)} = ${share}% of the file`);
+    check(parquetWire.length > 0, 'the live page fetched the Parquet file', `${parquetWire.length} requests`);
+    check(partial.length > 0, 'and Pages answered them with 206 Partial Content', `${partial.length} of ${parquetWire.length}`);
+    check(whole.length === 0, 'with no whole-file GET', `${whole.length} responses were 200`);
+    check(bytes < size, 'so the live first paint did NOT download the file', `${mb(bytes)} of ${mb(size)} — ${share}%`);
+    measurement = { live: true, url: origin, size, firstPaint: { requests: parquetWire.length, partial: partial.length, bytes, percentOfFile: share } };
+
+    /* And ask Pages directly, which is the fact the page's claim depends on. */
     const url = `${origin}/${PARQUET}`;
     const response = await fetch(url, { headers: { Range: 'bytes=0-1023' } });
     const contentRange = response.headers.get('content-range');
@@ -695,6 +817,11 @@ async function run() {
     check(Number(head.headers.get('content-length')) === size,
       'the published Parquet file is the committed one',
       `${head.headers.get('content-length')} against ${size}`);
+    /* Pages has no /__ranges endpoint, so the page must fall back to the
+       recorded measurement rather than showing nothing. */
+    check(shown.rangeSource === 'recorded',
+      'the live page falls back to the recorded byte measurement', String(shown.rangeSource));
+    check(/of the file/.test(shown.rangeText), 'and shows it', shown.rangeText.slice(0, 90));
   } else {
     check(firstPaintFile != null, 'the server saw the Parquet file being read');
     if (firstPaintFile && filteredFile) {
