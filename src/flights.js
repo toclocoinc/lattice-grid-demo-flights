@@ -109,7 +109,7 @@ export const COLUMNS = [
        its own documentation. A `lookup` column shows the word and keeps the
        letter as the value, so the set filter still pushes down as the letter. */
     field: 'cancellation_code', title: 'Why cancelled', type: 'lookup',
-    lookup: { options: Object.entries(CANCELLATION_REASONS).map(([value, label]) => ({ value, label })) },
+    lookup: { options: Object.entries(CANCELLATION_REASONS).map(([id, label]) => ({ id, label })), unknownLabel: (v) => String(v) },
     filter: { type: 'set' }, layout: { width: 150 }, allowGroup: false,
   },
   { field: 'diverted', title: 'Diverted', type: 'boolean', layout: { width: 90, hidden: true }, allowGroup: false },

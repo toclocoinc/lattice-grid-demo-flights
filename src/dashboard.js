@@ -586,7 +586,10 @@ export function buildDashboard({
         flights: num(group.values.flights),
         mean: num(group.values.mean),
       }))
-      .filter((row) => row.id != null)
+      /* A group whose measure is null has nothing to plot. Dropping it here is
+         what lets a filter with no measurable delays — cancelled flights, say —
+         leave a chart genuinely empty rather than holding its last picture. */
+      .filter((row) => row.id != null && row.mean != null)
       .sort((a, b) => a.id - b.id);
     feed('hour',
       [{ field: 'id', type: 'number' }, { field: 'hour' }, { field: 'flights', type: 'number' }, { field: 'mean', type: 'number' }],
@@ -628,7 +631,7 @@ export function buildDashboard({
           mean: num(group.values.mean),
         };
       })
-      .filter((row) => row.id != null)
+      .filter((row) => row.id != null && row.mean != null)
       .sort((a, b) => a.id - b.id);
     feed('daily',
       [{ field: 'id', type: 'number' }, { field: 'day' }, { field: 'label' }, { field: 'mean', type: 'number' }],

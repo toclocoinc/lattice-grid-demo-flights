@@ -620,14 +620,47 @@ async function run() {
     `${int(narrowed.match)} rows match`);
 
   await evaluate("window.__flightsDemo.setGrouping('carrier')");
-  await waitFor('window.__flightsDemo.grouped === true && window.__flightsDemo.grid.rows.count() > 0', 90000, 'the grouped grid');
-  await sleep(1500);
+  /* Wait for the REBUILT grid's own fetch to land, not merely for the flag: the
+     whole-set pull is what makes the subtotals real, and `plan.full` is only
+     true once the new source has answered. Screenshotting before that caught a
+     grid with headers and no cells. */
+  await waitFor('window.__flightsDemo.grouped === true && window.__flightsDemo.plan && window.__flightsDemo.plan.full === true && window.__flightsDemo.grid.rows.count() > 0', 90000, 'the grouped grid to finish its whole-set pull');
+  await sleep(3000);
   const groupedState = await evaluate(`({
     grouped: window.__flightsDemo.grouped,
     full: window.__flightsDemo.plan ? window.__flightsDemo.plan.full : null,
     rows: window.__flightsDemo.grid.rows.count(),
+    /* What is actually on screen, not what the model says is loaded. */
+    painted: (document.querySelector('.grid-host') || { textContent: '' }).textContent.replace(/\s+/g, ' ').trim().length,
+    text: (document.querySelector('.grid-host') || { textContent: '' }).textContent.replace(/\s+/g, ' ').trim(),
     client: [...document.querySelectorAll('[data-client] li')].map((n) => n.textContent),
   })`);
+  check(groupedState.painted > 200,
+    'the grouped grid actually painted cells, not an empty frame',
+    `${groupedState.painted} characters of text in the grid`);
+  /* Cancelled flights are on screen here, so this is the one moment the
+     cancellation-reason column has something to show. BTS stores a letter; the
+     column is declared as a lookup so the reader sees the word BTS defines. */
+  check(/Weather|Carrier|National Air System|Security/.test(groupedState.text),
+    'the cancellation reason renders as BTS\'s word, not its raw letter',
+    groupedState.text.slice(0, 80));
+
+  /*
+   * A filter that leaves nothing measurable must empty every chart, not leave
+   * the last picture on screen. Cancelled flights have no arrival delay, so at
+   * this point four of the five charts have nothing to draw.
+   */
+  const stale = await evaluate(`(() => {
+    const d = window.__flightsDemo;
+    const marks = (id) => document.querySelectorAll('[data-chart=' + id + '] svg rect, [data-chart=' + id + '] svg path, [data-chart=' + id + '] svg circle').length;
+    return { rows: Object.fromEntries(['dist','carrier','hour','daily','routes'].map((id) => [id, d.chartGrids[id].rows.count()])),
+             marks: Object.fromEntries(['dist','carrier','hour','daily'].map((id) => [id, marks(id)])) };
+  })()`);
+  const emptied = ['dist', 'carrier', 'hour', 'daily'].filter((id) => stale.rows[id] === 0);
+  check(emptied.length === 4,
+    'every delay chart is empty when the filter leaves no measurable delay',
+    `rows ${JSON.stringify(stale.rows)}`);
+  check(stale.rows.routes > 0, 'while the route treemap, which counts flights, still has data', `${stale.rows.routes} routes`);
   check(groupedState.rows > 0, 'the grouped grid holds rows', `${int(groupedState.rows)}`);
   check(groupedState.grouped === true && groupedState.full === true,
     'the grouped grid holds the whole matching set rather than a window',
