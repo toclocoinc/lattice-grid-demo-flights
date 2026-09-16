@@ -184,6 +184,8 @@ body {
   max-width: 90ch;
 }
 .colophon a { color: var(--accent); }
+.why-zip { display: block; margin-top: 8px; color: var(--ink-3); }
+.why-zip code { font-family: var(--mono); font-size: 0.92em; }
 
 /* ----------------------------------------------------------- narrow */
 

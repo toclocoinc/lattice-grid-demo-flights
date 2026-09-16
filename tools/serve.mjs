@@ -39,6 +39,11 @@ const TYPES = {
   '.css': 'text/css; charset=utf-8',
   '.json': 'application/json; charset=utf-8',
   '.parquet': 'application/vnd.apache.parquet',
+  /* The data file is published under a .zip name because GitHub Pages will not
+     gzip an archive type, and a gzipped response breaks range reads. Serving it
+     as application/zip here means the local check is exercising the same content
+     type the published site does. It is a plain zstd Parquet file either way. */
+  '.zip': 'application/zip',
   '.wasm': 'application/wasm',
   '.svg': 'image/svg+xml',
   '.png': 'image/png',

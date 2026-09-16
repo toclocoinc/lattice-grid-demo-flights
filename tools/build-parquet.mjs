@@ -8,6 +8,7 @@
  *   node tools/build-parquet.mjs                 # the committed month
  *   node tools/build-parquet.mjs --month 2026-05 # a different one
  *   node tools/build-parquet.mjs --keep          # keep the 275 MB CSV around
+ *   node tools/build-parquet.mjs --ext bin       # same bytes, another extension
  *
  * What it does:
  *
@@ -30,7 +31,8 @@
  */
 
 import { spawn } from 'node:child_process';
-import { access, mkdir, rm, stat, writeFile } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
+import { access, mkdir, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises';
 import { createWriteStream } from 'node:fs';
 import { Readable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
@@ -44,6 +46,21 @@ const cache = join(root, '.cache');
 const args = process.argv.slice(2);
 const monthArg = args.includes('--month') ? args[args.indexOf('--month') + 1] : '2026-06';
 const keepCsv = args.includes('--keep');
+/*
+ * The extension to write the Parquet under.
+ *
+ * It is not cosmetic. A static host decides whether to compress a response
+ * from its content type, and a compressed response breaks range reads: the
+ * host measures `Range` against the compressed length, so the footer read that
+ * opens a Parquet is answered against the wrong length. The file is the same
+ * bytes whatever it is called — DuckDB's `read_parquet` reads the format from
+ * the file, not from the name — so the extension is free to be whichever one
+ * the host leaves alone. Point `PARQUET` in src/flights.js at whatever this
+ * writes; `node tools/verify.mjs --live` asserts the published response is
+ * uncompressed and that a footer range is satisfiable against the real length.
+ */
+const ext = (args.includes('--ext') ? args[args.indexOf('--ext') + 1] : 'parquet').replace(/^\./, '');
+if (!/^[A-Za-z0-9.]{1,20}$/.test(ext)) throw new Error(`--ext wants a plain extension, got "${ext}"`);
 
 const [year, month] = monthArg.split('-').map(Number);
 if (!Number.isInteger(year) || !Number.isInteger(month) || month < 1 || month > 12) {
@@ -54,7 +71,7 @@ const stem = `On_Time_Reporting_Carrier_On_Time_Performance_1987_present_${year}
 const ZIP_URL = `https://transtats.bts.gov/PREZIP/${stem}.zip`;
 const zipFile = join(cache, `${stem}.zip`);
 const csvFile = join(cache, `On_Time_Reporting_Carrier_On_Time_Performance_(1987_present)_${year}_${month}.csv`);
-const outFile = join(root, 'data', `flights-${String(year)}-${String(month).padStart(2, '0')}.parquet`);
+const outFile = join(root, 'data', `flights-${String(year)}-${String(month).padStart(2, '0')}.${ext}`);
 
 const exists = async (path) => {
   try { await access(path); return true; } catch { return false; }
@@ -189,10 +206,31 @@ const groups = (await conn.runAndReadAll(`
 `)).getRowObjects()[0];
 
 const size = (await stat(outFile)).size;
+const sha256 = createHash('sha256').update(await readFile(outFile)).digest('hex');
+
+/*
+ * The extension is a hosting decision, not a data one, so the same month under
+ * two names must be the same bytes — otherwise the copy published for download
+ * under its real name is a different file from the one the page reads. Any
+ * sibling of this month under another extension is compared, and a mismatch
+ * fails the build rather than being written into a summary nobody reads.
+ */
+const outStem = `flights-${String(year)}-${String(month).padStart(2, '0')}.`;
+const siblings = (await readdir(join(root, 'data')))
+  .filter((name) => name.startsWith(outStem) && name !== `${outStem}${ext}`);
+const identical = {};
+for (const name of siblings) {
+  const other = createHash('sha256').update(await readFile(join(root, 'data', name))).digest('hex');
+  identical[name] = other === sha256;
+  console.log(`  ${other === sha256 ? 'identical to' : 'DIFFERS FROM'} ${name}`);
+  if (other !== sha256) process.exitCode = 1;
+}
 const summary = {
   file: outFile.slice(root.length + 1),
   bytes: size,
   megabytes: Number((size / 1048576).toFixed(2)),
+  sha256,
+  identicalTo: identical,
   rows: Number(facts.rows),
   row_groups: Number(groups.row_groups),
   first_date: String(facts.first_date),

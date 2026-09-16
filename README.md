@@ -2,7 +2,8 @@
 
 **Live: https://toclocoinc.github.io/lattice-grid-demo-flights/**
 
-607,577 flights. One 14.67 MB Parquet file on a static host. No server, no API,
+607,577 flights. One 14.67 MB Parquet file on a static host (published under a
+`.zip` name — [why](#why-the-data-file-is-called-zip)). No server, no API,
 no pre-built aggregation cube — a query engine in the tab, and a grid that
 shows you the SQL it sent.
 
@@ -25,10 +26,10 @@ inside a worker and nothing in the page can see those requests:
 
 | | HTTP requests | Bytes read | Share of the 14.67 MB file |
 |---|---|---|---|
-| One page of rows and its count, unsorted | 38 (36 answered 206) | 1.20 MB | **8.2%** |
+| Returning to the unsorted order after a sort — nothing new to read | 2 (0 answered 206) | **0 bytes** | **0%** |
 | The first paint: that page, plus the six whole-set queries behind the tiles and the charts | 177 (168 answered 206) | 6.18 MB | **42.1%** |
-| One filtered query (`arr_delay >= 60`) and everything it recomputes | 214 (206 answered 206) | 7.53 MB | **51.3%** |
-| Re-sorting the whole file by arrival delay and fetching the first page of that order | 366 (364 answered 206) | 13.07 MB | **89.1%** |
+| One filtered query (`arr_delay >= 60`) and everything it recomputes | 176 (168 answered 206) | 5.92 MB | **40.4%** |
+| Re-sorting the whole file by arrival delay and fetching the first page of that order | 364 (362 answered 206) | 13.02 MB | **88.7%** |
 
 Not one whole-file `GET` in any of them — the check asserts that, not merely that some requests were 206.
 
@@ -36,14 +37,60 @@ Measured 2026-09-16 by `tools/serve.mjs`, which records every request for a file
 [`data/range-measurement.json`](data/range-measurement.json) by `node tools/verify.mjs --record`. The published page
 falls back to it and says so.
 
-All four numbers are quoted because they are wildly different and the cheap one alone would be the flattering
-quarter of the truth. Paging the table is cheap: one row group's column chunks. The whole-set statistics cost more,
-because a `quantile_cont` over every matching row has to read that column from all twelve row groups. And a **global
-sort is the expensive one** — an `ORDER BY` over 607,577 rows reads that column out of every row group and then
-fetches the page, which is 89% of the file. That is the real shape of the trade, not a slogan.
+All four numbers are quoted because they are wildly different, and the cheap one alone would be the
+flattering quarter of the truth.
+
+The zero is real and worth reading carefully: it is not what a page of rows costs, it is what a page
+costs when the engine already holds the row groups it needs — two HEAD probes and not one byte of
+body. Ask for something it has not read and it pays for it. The whole-set statistics are the clearest
+case: a `quantile_cont` over every matching row has to read that column out of all twelve row groups,
+which is the 42%. And a **global sort is the expensive one** — an `ORDER BY` over 607,577 rows reads
+that column from every row group and then fetches the page, 88.7% of the file. That is the real shape
+of the trade, not a slogan.
 
 What the sort and the row groups buy is pruning: a filter on `flight_date` can only touch the groups whose recorded
 min/max fail to rule it out, and on a file sorted by date that is a handful of the twelve rather than all of them.
+
+### Why the data file is called `.zip`
+
+It is a plain zstd Parquet file, not an archive.
+
+GitHub Pages gzips binary files on the fly, and then evaluates `Range` against
+the **compressed** length. DuckDB opens a Parquet by reading its footer from the
+end of the real file, so that read comes back `416 Range Not Satisfiable` — or,
+for the suffix form DuckDB actually uses, `206` carrying the last bytes of the
+gzip stream, which is worse, because it looks like an answer. Measured against
+the published file:
+
+```
+$ curl -sI -H "Accept-Encoding: gzip" …/flights-2026-06.parquet
+content-encoding: gzip
+content-length: 15135729          ← the compressed length, not the file's
+
+$ curl -s -D- -H "Accept-Encoding: gzip" -H "Range: bytes=15366831-15383214" …
+HTTP/2 416
+content-range: bytes */15135729
+```
+
+`curl` sends no `Accept-Encoding`; every browser sends one. That is why a
+`bytes=0-1023` probe certified a deploy that did not work — it is the one
+request shape satisfiable against either length.
+
+Pages leaves archive, image, font and video types uncompressed, so the file is
+published under a `.zip` name. `read_parquet` reads the format from the file and
+never from the name, and `tools/build-parquet.mjs` asserts that the two names are
+byte for byte the same file (`sha256 cf693e49…`). The same bytes are downloadable
+under their real name, `flights-2026-06.parquet`, from this repository's
+`data-2026-06` release.
+
+The proper fix is a CORS header on our CloudFront `demo-data` path, which is an
+AWS change the owner has to make; when it lands, the file moves there under its
+real name and this paragraph goes away.
+
+`node tools/verify.mjs --live` asserts all of it: that the published response
+carries no `content-encoding`, that it reports the real length to a browser, and
+that both a footer range and the suffix form are satisfiable against that real
+length. That check is what was missing.
 
 The published site is GitHub Pages, which answers `206 Partial Content` the same
 way; `node tools/verify.mjs --live` asks it for a byte range and checks that it
@@ -65,7 +112,7 @@ recorded, with its bound parameters and its timing.
 
 ```
 -- the page on screen · 42 ms · 200 rows back
-SELECT "flight_id", "flight_date", … FROM read_parquet('…/flights-2026-06.parquet')
+SELECT "flight_id", "flight_date", … FROM read_parquet('…/flights-2026-06.zip')
 WHERE ("arr_delay" >= ?) ORDER BY "arr_delay" DESC LIMIT 200 OFFSET 0
 -- bound: [60]
 ```
@@ -212,7 +259,7 @@ index.html
   src/flights.js          the columns, the presets, the aggregate requests
   src/dashboard.js        the grid, the tiles, the charts, the push-plan panel
   src/licence.js          the demo's own domain-bound key
-  data/flights-2026-06.parquet
+  data/flights-2026-06.zip        the Parquet file, under a name Pages will not gzip
 tools/
   build-parquet.mjs       BTS zip → one sorted, zstd Parquet file (developer only)
   serve.mjs               static server with Range support and byte accounting
@@ -230,7 +277,7 @@ await connection.query('LOAD httpfs;');          // range reads, not a download
 const source = createPushdownSource({
   adapter: duckdbAdapter({
     connection,
-    from: `read_parquet('${new URL('./data/flights-2026-06.parquet', location.href)}')`,
+    from: `read_parquet('${new URL('./data/flights-2026-06.zip', location.href)}')`,
     fields: GRID_FIELDS,                          // not SELECT *, on a columnar file
   }),
   compute: LG,

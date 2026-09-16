@@ -61,6 +61,10 @@ export function buildDashboard({
   root, LG, createChart, createKPI, connection, recordSql, sqlLog, duckdbVersion,
 }) {
   const FILE = new URL(PARQUET, location.href).href;
+  /* The data file's own name, not its extension: the extension is a hosting
+     decision that changes, and matching on it is how a rename quietly stops the
+     byte readout finding its own file. */
+  const DATA_FILE = PARQUET.split('/').pop();
 
   const built = {
     ready: false,
@@ -731,7 +735,7 @@ export function buildDashboard({
     const live = await readRangeAccounting();
     built.ranges = live;
     built.rangeSource = live ? 'live' : 'recorded';
-    const file = live?.files?.find((f) => f.path.endsWith('.parquet'));
+    const file = live?.files?.find((f) => f.path.endsWith(DATA_FILE));
     rangePanel.textContent = '';
     rangePanel.append(el('h3', null, 'What was actually read off the wire'));
     const body = el('p', 'range-body');
@@ -771,7 +775,12 @@ export function buildDashboard({
     'Source: <a href="https://www.transtats.bts.gov/Fields.asp?gnoyr_VQ=FGJ">US Bureau of Transportation Statistics</a>, '
     + 'Reporting Carrier On-Time Performance, June 2026 — a work of the US government, in the public domain. '
     + 'Built with <a href="https://latticegrid.dev">Lattice Grid</a> and '
-    + '<a href="https://duckdb.org/docs/api/wasm/overview.html">DuckDB-Wasm</a>.';
+    + '<a href="https://duckdb.org/docs/api/wasm/overview.html">DuckDB-Wasm</a>.'
+    + '<br><span class="why-zip">Why the data file is called <code>.zip</code>: GitHub Pages gzips binary files on the fly '
+    + 'and evaluates byte ranges against the compressed length, which breaks DuckDB\u2019s footer read. It leaves archive '
+    + 'types alone, so the file is published under a <code>.zip</code> name — it is a plain zstd Parquet file, not an '
+    + 'archive. The same bytes are downloadable as <code>flights-2026-06.parquet</code> from this repository\u2019s '
+    + '<code>data-2026-06</code> release.</span>';
 
   built.setParquetSize = (bytes) => { built.parquetBytes = bytes; renderFacts(); };
   built.renderRanges = renderRanges;

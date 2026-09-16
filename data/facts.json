@@ -1,7 +1,11 @@
 {
-  "file": "data/flights-2026-06.parquet",
+  "file": "data/flights-2026-06.zip",
   "bytes": 15383215,
   "megabytes": 14.67,
+  "sha256": "cf693e498274d554e9f6ee0e0a366abfcfee532d527c7c3cf75c51adb19b3801",
+  "identicalTo": {
+    "flights-2026-06.parquet": true
+  },
   "rows": 607577,
   "row_groups": 12,
   "first_date": "2026-06-01",

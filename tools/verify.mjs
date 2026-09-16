@@ -39,6 +39,9 @@ import { dirname, join, resolve } from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
 import { startServer } from './serve.mjs';
+/* The page's own name for the data file, not a second copy of it: renaming the
+   file is one line in src/flights.js and this follows. */
+import { PARQUET as PAGE_PARQUET } from '../src/flights.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const root = join(here, '..');
@@ -55,7 +58,10 @@ const liveUrl = live
     : 'https://toclocoinc.github.io/lattice-grid-demo-flights/')
   : null;
 
-const PARQUET = 'data/flights-2026-06.parquet';
+const PARQUET = PAGE_PARQUET.replace(/^\.?\//, '');
+/* Match the served file by its name. Matching by extension is what broke when
+   the file was renamed to dodge the host's compression. */
+const DATA_FILE = PARQUET.split('/').pop();
 
 /* The published check is the one people look at the screenshots of, so it runs
    at a size worth looking at. */
@@ -319,7 +325,7 @@ async function run() {
     }
     if (message.method === 'Network.requestWillBeSent') {
       const { requestId, request } = message.params;
-      if (/\.parquet(\?|$)/.test(request.url)) {
+      if (request.url.endsWith(DATA_FILE)) {
         const headers = request.headers || {};
         const range = headers.Range ?? headers.range ?? null;
         networkFor().set(requestId, { url: request.url, range, method: request.method, status: null, bytes: 0 });
@@ -457,7 +463,7 @@ async function run() {
      page declared itself ready. */
   const firstPaintWire = wireEntries.slice();
   const firstPaintRanges = served ? served.ranges() : null;
-  const firstPaintFile = firstPaintRanges?.files?.find((f) => f.path.endsWith('.parquet')) ?? null;
+  const firstPaintFile = firstPaintRanges?.files?.find((f) => f.path.endsWith(DATA_FILE)) ?? null;
 
   const shown = await evaluate(`(() => {
     const d = window.__flightsDemo;
@@ -641,7 +647,7 @@ async function run() {
   await evaluate("window.__flightsDemo.grid.sort.set([{ col: 'arr_delay', dir: 'desc' }])");
   await sleep(4000);
   const sortRanges = served ? served.ranges() : null;
-  const sortFile = sortRanges?.files?.find((f) => f.path.endsWith('.parquet')) ?? null;
+  const sortFile = sortRanges?.files?.find((f) => f.path.endsWith(DATA_FILE)) ?? null;
   const sorted = await evaluate(`(() => {
     const d = window.__flightsDemo;
     const first = [];
@@ -655,7 +661,7 @@ async function run() {
   await evaluate("window.__flightsDemo.grid.sort.set([])");
   await sleep(4000);
   const pageRanges = served ? served.ranges() : null;
-  const pageFile = pageRanges?.files?.find((f) => f.path.endsWith('.parquet')) ?? null;
+  const pageFile = pageRanges?.files?.find((f) => f.path.endsWith(DATA_FILE)) ?? null;
   if (pageFile && sortFile) {
     check(pageFile.bytes < sortFile.bytes,
       'an unsorted page costs far less than a re-sort of the whole file',
@@ -674,7 +680,7 @@ async function run() {
   await sleep(2500);
 
   const filteredRanges = served ? served.ranges() : null;
-  const filteredFile = filteredRanges?.files?.find((f) => f.path.endsWith('.parquet')) ?? null;
+  const filteredFile = filteredRanges?.files?.find((f) => f.path.endsWith(DATA_FILE)) ?? null;
 
   const filtered = await evaluate(`(() => {
     const d = window.__flightsDemo;
@@ -804,8 +810,55 @@ async function run() {
     check(bytes < size, 'so the live first paint did NOT download the file', `${mb(bytes)} of ${mb(size)} — ${share}%`);
     measurement = { live: true, url: origin, size, firstPaint: { requests: parquetWire.length, partial: partial.length, bytes, percentOfFile: share } };
 
-    /* And ask Pages directly, which is the fact the page's claim depends on. */
+    /*
+     * And ask the host directly, the way a browser does.
+     *
+     * This is the check that was missing, and its absence let a broken deploy
+     * look healthy. `curl` sends no `Accept-Encoding`; every browser sends one.
+     * A host that compresses the response then measures `Range` against the
+     * COMPRESSED length, so:
+     *
+     *   - the tail of the real file is past that length, and the footer read —
+     *     which is how DuckDB opens a Parquet at all — comes back 416;
+     *   - a range that IS satisfiable returns a slice of the compressed bytes,
+     *     which is not the slice of the file that was asked for.
+     *
+     * `bytes=0-1023` is the one request shape that survives both, which is
+     * exactly why it certified a deploy that does not work. So the assertions
+     * below are made with a browser's headers, against the real length, at the
+     * end of the file.
+     */
     const url = `${origin}/${PARQUET}`;
+    const browserish = { 'Accept-Encoding': 'gzip, deflate, br, zstd' };
+
+    const browserHead = await fetch(url, { method: 'HEAD', headers: browserish });
+    const encoding = browserHead.headers.get('content-encoding');
+    check(!encoding,
+      'the host serves the Parquet uncompressed to a browser',
+      encoding ? `content-encoding: ${encoding} — Range will be measured against the compressed length` : 'no content-encoding');
+    check(Number(browserHead.headers.get('content-length')) === size,
+      'and reports the real length to a browser',
+      `${browserHead.headers.get('content-length')} against ${size}`);
+
+    /* The footer read, as DuckDB issues it: the last bytes of the real file. */
+    const tailFrom = size - 16384;
+    const tail = await fetch(url, { headers: { ...browserish, Range: `bytes=${tailFrom}-${size - 1}` } });
+    const tailRange = tail.headers.get('content-range');
+    check(tail.status === 206,
+      'a footer Range — how DuckDB opens a Parquet — is satisfiable',
+      `status ${tail.status}${tailRange ? `, content-range ${tailRange}` : ''}`);
+    check(tailRange === `bytes ${tailFrom}-${size - 1}/${size}`,
+      'and is measured against the real length, not a compressed one',
+      String(tailRange));
+
+    /* The suffix form, which is the one DuckDB actually opens with. */
+    const suffix = await fetch(url, { headers: { ...browserish, Range: 'bytes=-16384' } });
+    check(suffix.status === 206, 'the suffix Range form is satisfiable too', `status ${suffix.status}`);
+    check(/\/(\d+)$/.test(suffix.headers.get('content-range') || '')
+      && Number((suffix.headers.get('content-range') || '').split('/')[1]) === size,
+      'and reports the real length as the total',
+      String(suffix.headers.get('content-range')));
+
     const response = await fetch(url, { headers: { Range: 'bytes=0-1023' } });
     const contentRange = response.headers.get('content-range');
     check(response.status === 206, 'the published host answers 206 Partial Content', `status ${response.status}`);
@@ -845,7 +898,7 @@ async function run() {
         file: PARQUET,
         size,
         firstPaint: phase(firstPaintFile, 'the first paint: a page of rows, the count, and the six whole-set queries behind the tiles and the charts'),
-        pageOnly: pageFile ? phase(pageFile, 'one more page of rows and its count, unsorted — no whole-set queries') : null,
+        pageOnly: pageFile ? phase(pageFile, 'returning to the unsorted order after a sort — the engine already held those row groups, so this is what a page costs when nothing new has to be read') : null,
         sorted: sortFile ? phase(sortFile, 're-sorting the whole file by arrival delay and fetching the first page of that order') : null,
         filtered: {
           ...phase(filteredFile, 'one filtered query: arr_delay >= 60, its count, and the whole-set queries again'),
@@ -858,7 +911,7 @@ async function run() {
         + `${String(file.head ?? 0).padStart(2)} HEAD, ${mb(file.bytes).padStart(9)} of ${mb(size)} = ${String(file.percentOfFile).padStart(5)}% of the file`;
       console.log('\nRange reads, measured by the server that served the file:');
       console.log(line('first paint', firstPaintFile));
-      if (pageFile) console.log(line('one unsorted page', pageFile));
+      if (pageFile) console.log(line('page, already held', pageFile));
       if (sortFile) console.log(line('re-sort whole file', sortFile));
       console.log(line('arr_delay >= 60', filteredFile));
       if (record) {

@@ -7,8 +7,31 @@
  * computed in the page that the engine could compute instead.
  */
 
-/** The file the engine reads. Absolute, because DuckDB resolves it itself, in a worker. */
-export const PARQUET = './data/flights-2026-06.parquet';
+/**
+ * The file the engine reads. Resolved to an absolute URL at the call site,
+ * because DuckDB resolves it itself, inside a worker.
+ *
+ * **This is the only place the data file is named.** `tools/verify.mjs` imports
+ * it rather than repeating it, so pointing the demo at a different file — a
+ * different month, or the same bytes under a different extension — is this one
+ * line and nothing else.
+ *
+ * The extension is not cosmetic, and `.zip` is not a mistake. GitHub Pages
+ * gzips binary files on the fly and then evaluates `Range` against the
+ * COMPRESSED length, so the read of the Parquet footer — which lives at the end
+ * of the real file — is answered `416`, or worse, `206` with the wrong bytes,
+ * and the engine has nothing to open. Pages leaves archive types alone, so the
+ * same bytes are published under a `.zip` name. **It is a plain zstd Parquet
+ * file, not an archive**: `read_parquet` reads the format from the file, never
+ * from the name, and `tools/build-parquet.mjs` asserts the two names are byte
+ * for byte the same file.
+ *
+ * Whatever this points at, `node tools/verify.mjs --live` asserts the published
+ * response carries no `content-encoding` and that a footer range is satisfiable
+ * against the real length — the check whose absence let a broken deploy look
+ * healthy.
+ */
+export const PARQUET = './data/flights-2026-06.zip';
 
 /** The month on show, for headings. */
 export const MONTH_LABEL = 'June 2026';

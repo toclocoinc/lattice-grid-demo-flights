@@ -1,7 +1,17 @@
 # The data
 
-`flights-2026-06.parquet` — one month of US domestic flights, as the airlines
+`flights-2026-06.zip` — one month of US domestic flights, as the airlines
 reported them.
+
+**It is a plain zstd Parquet file, not an archive.** GitHub Pages gzips binary
+files on the fly and evaluates byte ranges against the compressed length, which
+breaks DuckDB's footer read; it leaves archive types alone, so the file is
+published under a `.zip` name. `read_parquet` reads the format from the file,
+never from the name. The same bytes are downloadable under their real name,
+`flights-2026-06.parquet`, from this repository's `data-2026-06` release, and
+`tools/build-parquet.mjs` asserts the two are byte for byte identical. The
+proper fix is a CORS header on our CloudFront `demo-data` path — an AWS change
+the owner has to make; when it lands the file moves there under its real name.
 
 | | |
 |---|---|
@@ -14,6 +24,7 @@ reported them.
 | Routes | 6,131 |
 | Cancellations | 10,019 |
 | File | 14.67 MB, Parquet, zstd, 12 row groups of 50,000 rows, sorted by flight date |
+| sha256 | `cf693e498274d554e9f6ee0e0a366abfcfee532d527c7c3cf75c51adb19b3801` |
 | Licence | A work of the United States government. Not subject to copyright in the US; in the public domain. BTS asks that it be credited, and the page does. |
 
 `facts.json` holds the same figures, written by the build script, and the page
@@ -29,9 +40,14 @@ log a visitor could read.
 ## Rebuilding it
 
 ```
-npm install          # @duckdb/node-api comes in as a devDependency
-node tools/build-parquet.mjs
+npm install                            # @duckdb/node-api comes in as a devDependency
+node tools/build-parquet.mjs --ext zip # the name the page reads
 ```
+
+`--ext` decides only the file name; the bytes are the same whatever it is. When
+a sibling of the same month exists under another extension the script compares
+their hashes and fails the build if they differ, because the copy published for
+download under its real name must be the file the page reads.
 
 The script downloads the month's zip (caching it in `.cache/`), unzips it with
 the `unzip` command, and writes the Parquet file with DuckDB. Nothing the

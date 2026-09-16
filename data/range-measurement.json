@@ -1,5 +1,5 @@
 {
-  "file": "data/flights-2026-06.parquet",
+  "file": "data/flights-2026-06.zip",
   "size": 15383215,
   "firstPaint": {
     "label": "the first paint: a page of rows, the count, and the six whole-set queries behind the tiles and the charts",
@@ -10,28 +10,28 @@
     "percentOfFile": 42.1
   },
   "pageOnly": {
-    "label": "one more page of rows and its count, unsorted — no whole-set queries",
-    "requests": 38,
-    "partial": 36,
+    "label": "returning to the unsorted order after a sort \u2014 the engine already held those row groups, so this is what a page costs when nothing new has to be read",
+    "requests": 2,
+    "partial": 0,
     "head": 2,
-    "bytes": 1262303,
-    "percentOfFile": 8.2
+    "bytes": 0,
+    "percentOfFile": 0
   },
   "sorted": {
     "label": "re-sorting the whole file by arrival delay and fetching the first page of that order",
-    "requests": 366,
-    "partial": 364,
+    "requests": 364,
+    "partial": 362,
     "head": 2,
-    "bytes": 13702571,
-    "percentOfFile": 89.1
+    "bytes": 13651056,
+    "percentOfFile": 88.7
   },
   "filtered": {
     "label": "one filtered query: arr_delay >= 60, its count, and the whole-set queries again",
-    "requests": 214,
-    "partial": 206,
+    "requests": 176,
+    "partial": 168,
     "head": 8,
-    "bytes": 7893413,
-    "percentOfFile": 51.3,
+    "bytes": 6208604,
+    "percentOfFile": 40.4,
     "query": "arr_delay >= 60"
   },
   "measuredOn": "2026-09-16",
