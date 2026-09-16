@@ -1,0 +1,22 @@
+{
+  "name": "lattice-grid-demo-flights",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "license": "MIT",
+  "dependencies": {
+    "@toclocoinc/lattice-grid": "^1.62.1"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "devDependencies": {
+    "@duckdb/node-api": "^1.5.5-r.5"
+  },
+  "description": "Every US domestic flight in June 2026 in one Parquet file, queried in the browser with DuckDB-Wasm and Lattice Grid, with the push plan and the byte reads on show.",
+  "scripts": {
+    "start": "node tools/serve.mjs",
+    "verify": "node tools/verify.mjs",
+    "build-data": "node tools/build-parquet.mjs"
+  }
+}

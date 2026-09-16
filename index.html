@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>US flight delays, June 2026, queried in the browser with DuckDB and Lattice Grid</title>
+    <meta
+      name="description"
+      content="Every US domestic flight in June 2026 — 607,577 of them — in one 15 MB Parquet file on a static host. DuckDB-Wasm reads it in byte ranges, Lattice Grid turns every filter, sort and page into SQL, and shows the plan. Public-domain data from the US Bureau of Transportation Statistics."
+    />
+    <link rel="icon" href="data:," />
+    <link rel="stylesheet" href="./node_modules/@toclocoinc/lattice-grid/lattice-grid.min.css" />
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <main id="app">
+      <div class="loading">
+        <h1>US flight delays, June 2026</h1>
+        <p class="loading-message">Starting...</p>
+      </div>
+    </main>
+    <script type="module" src="./main.js"></script>
+  </body>
+</html>

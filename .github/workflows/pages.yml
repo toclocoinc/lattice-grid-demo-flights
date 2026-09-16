@@ -1,0 +1,63 @@
+name: Publish the demo
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# One publish at a time. A run already under way is left to finish, so a
+# half-uploaded site is never what ends up live.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out the demo
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      # The page loads the grid straight out of node_modules, so the
+      # dependencies are part of what gets published rather than a build input.
+      # @duckdb/node-api comes along as a devDependency because the check below
+      # recomputes every figure with a second DuckDB, in Node.
+      - name: Install
+        run: npm ci
+
+      # Opens the page in headless Chrome against a range-capable server and
+      # checks every figure against Node's own DuckDB. It fails the build if
+      # the page says anything the data does not.
+      - name: Check the page tells the truth
+        run: npm run verify
+
+      - name: Configure Pages
+        uses: actions/configure-pages@v5
+        with:
+          enablement: true
+
+      - name: Package the site
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: .
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Publish to Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

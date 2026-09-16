@@ -1,0 +1,15 @@
+{
+  "file": "data/flights-2026-06.parquet",
+  "bytes": 15383215,
+  "megabytes": 14.67,
+  "rows": 607577,
+  "row_groups": 12,
+  "first_date": "2026-06-01",
+  "last_date": "2026-06-30",
+  "carriers": 12,
+  "airports": 351,
+  "routes": 6131,
+  "cancellations": 10019,
+  "source": "https://transtats.bts.gov/PREZIP/On_Time_Reporting_Carrier_On_Time_Performance_1987_present_2026_6.zip",
+  "built": "2026-09-16"
+}
