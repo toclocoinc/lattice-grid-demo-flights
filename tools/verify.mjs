@@ -521,17 +521,21 @@ async function run() {
   /* ---------------------------------------------------------------- */
 
   /*
-   * A sort re-queries the rows and the count and nothing else — the whole-set
-   * aggregates only re-run when the filter changes. So this isolates what a
-   * page of the table costs, apart from the five whole-set queries behind the
-   * tiles and the charts. They are very different numbers and quoting only
-   * one of them would be the flattering half of the truth.
+   * Two more phases, measured apart, because they cost wildly different
+   * amounts and quoting only the cheap one would be the flattering third of
+   * the truth.
+   *
+   * A sort or a page re-queries the rows and the count and nothing else — the
+   * whole-set aggregates only re-run when the filter changes. But an ORDER BY
+   * over 607,577 rows makes DuckDB read that whole column across every row
+   * group, while an unsorted page reads one row group's chunks. So: sort
+   * first, measure; then clear the sort, measure that on its own.
    */
   served?.reset();
   await evaluate("window.__flightsDemo.grid.sort.set([{ col: 'arr_delay', dir: 'desc' }])");
   await sleep(4000);
-  const pageRanges = served ? served.ranges() : null;
-  const pageFile = pageRanges?.files?.find((f) => f.path.endsWith('.parquet')) ?? null;
+  const sortRanges = served ? served.ranges() : null;
+  const sortFile = sortRanges?.files?.find((f) => f.path.endsWith('.parquet')) ?? null;
   const sorted = await evaluate(`(() => {
     const d = window.__flightsDemo;
     const first = [];
@@ -541,12 +545,21 @@ async function run() {
   check(sorted.unpushed?.length === 0, 'the sort was pushed too', JSON.stringify(sorted.unpushed));
   check(/ORDER BY/.test(sorted.sql), 'and appears as ORDER BY in the plan panel');
 
+  served?.reset();
+  await evaluate("window.__flightsDemo.grid.sort.set([])");
+  await sleep(4000);
+  const pageRanges = served ? served.ranges() : null;
+  const pageFile = pageRanges?.files?.find((f) => f.path.endsWith('.parquet')) ?? null;
+  if (pageFile && sortFile) {
+    check(pageFile.bytes < sortFile.bytes,
+      'an unsorted page costs far less than a re-sort of the whole file',
+      `${mb(pageFile.bytes)} against ${mb(sortFile.bytes)}`);
+  }
+
   /* ---------------------------------------------------------------- */
   /* A filtered query: the figures follow, and so do the byte reads    */
   /* ---------------------------------------------------------------- */
 
-  await evaluate("window.__flightsDemo.grid.sort.set([])");
-  await sleep(1500);
   served?.reset();
   consoleErrors = [];
   pageErrors = [];
@@ -586,14 +599,22 @@ async function run() {
 
   /* ---------------- the guard lets go when it should --------------- */
 
-  await evaluate("window.__flightsDemo.togglePreset('cancelled')");
-  await waitFor(`window.__flightsDemo.matchCount !== null && window.__flightsDemo.matchCount < 40000`, 60000, 'a small enough match');
+  /*
+   * Narrow to something small AND non-empty. Stacking `cancelled` on top of
+   * `arr_delay >= 60` would match nothing — a cancelled flight has no arrival
+   * delay — and a grouping test over an empty set passes without testing
+   * anything. So swap the chips rather than adding one.
+   */
+  await evaluate("window.__flightsDemo.togglePreset('late60'); window.__flightsDemo.togglePreset('cancelled')");
+  await waitFor('window.__flightsDemo.matchCount !== null && window.__flightsDemo.matchCount > 0 && window.__flightsDemo.matchCount < 40000', 60000, 'a small, non-empty match');
   await sleep(1500);
   const narrowed = await evaluate(`({
     match: window.__flightsDemo.matchCount,
     groupDisabled: !!(document.querySelector('[data-group]') || {}).disabled,
     note: (document.querySelector('[data-group-note]') || {}).textContent || '',
   })`);
+  check(narrowed.match > 0 && narrowed.match < 40000,
+    'the filter narrowed to a small, non-empty set', `${int(narrowed.match)} rows`);
   check(narrowed.groupDisabled === false,
     'grouping is offered once the filter has narrowed the match below the limit',
     `${int(narrowed.match)} rows match`);
@@ -607,6 +628,7 @@ async function run() {
     rows: window.__flightsDemo.grid.rows.count(),
     client: [...document.querySelectorAll('[data-client] li')].map((n) => n.textContent),
   })`);
+  check(groupedState.rows > 0, 'the grouped grid holds rows', `${int(groupedState.rows)}`);
   check(groupedState.grouped === true && groupedState.full === true,
     'the grouped grid holds the whole matching set rather than a window',
     `plan.full ${groupedState.full}`);
@@ -659,7 +681,8 @@ async function run() {
         file: PARQUET,
         size,
         firstPaint: phase(firstPaintFile, 'the first paint: a page of rows, the count, and the six whole-set queries behind the tiles and the charts'),
-        pageOnly: pageFile ? phase(pageFile, 'one more page of rows and its count, after a sort — no whole-set queries') : null,
+        pageOnly: pageFile ? phase(pageFile, 'one more page of rows and its count, unsorted — no whole-set queries') : null,
+        sorted: sortFile ? phase(sortFile, 're-sorting the whole file by arrival delay and fetching the first page of that order') : null,
         filtered: {
           ...phase(filteredFile, 'one filtered query: arr_delay >= 60, its count, and the whole-set queries again'),
           query: 'arr_delay >= 60',
@@ -671,7 +694,8 @@ async function run() {
         + `${String(file.head ?? 0).padStart(2)} HEAD, ${mb(file.bytes).padStart(9)} of ${mb(size)} = ${String(file.percentOfFile).padStart(5)}% of the file`;
       console.log('\nRange reads, measured by the server that served the file:');
       console.log(line('first paint', firstPaintFile));
-      if (pageFile) console.log(line('one page of rows', pageFile));
+      if (pageFile) console.log(line('one unsorted page', pageFile));
+      if (sortFile) console.log(line('re-sort whole file', sortFile));
       console.log(line('arr_delay >= 60', filteredFile));
       if (record) {
         await writeFile(join(root, 'data', 'range-measurement.json'), `${JSON.stringify(measurement, null, 2)}\n`);

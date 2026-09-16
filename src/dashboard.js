@@ -744,7 +744,8 @@ export function buildDashboard({
         `Recorded on a local server running this same code, against this same file (${fmt.bytes(recorded.size)}). `
         + `The first paint — a page of rows, the count, and the six whole-set queries behind the tiles and charts — took `
         + `${phase(recorded.firstPaint)}. `
-        + (recorded.pageOnly ? `One more page of rows on its own took ${phase(recorded.pageOnly)}. ` : '')
+        + (recorded.pageOnly ? `One more page of rows, unsorted, took ${phase(recorded.pageOnly)}. ` : '')
+        + (recorded.sorted ? `Re-sorting the whole file by arrival delay took ${phase(recorded.sorted)} — an ORDER BY over 607,577 rows has to read that column out of every row group. ` : '')
         + `One filtered query (${recorded.filtered.query}) took ${phase(recorded.filtered)}. `
         + 'GitHub Pages answers 206 too, so the same reads happen here; it just keeps no log this page can read.';
       rangePanel.dataset.rangeSource = 'recorded';
