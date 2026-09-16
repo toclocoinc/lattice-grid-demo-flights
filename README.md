@@ -25,26 +25,25 @@ inside a worker and nothing in the page can see those requests:
 
 | | HTTP requests | Bytes read | Share of the 14.67 MB file |
 |---|---|---|---|
-| Opening the file and fetching the first page of rows with its count | 5 (3 answered 206, 2 HEAD) | 66 KB | **0.4%** |
-| The whole first paint — that page, plus the six whole-set queries behind the tiles and the charts | 177 (168 answered 206) | 6.18 MB | **42.1%** |
+| One page of rows and its count, unsorted | 38 (36 answered 206) | 1.20 MB | **8.2%** |
+| The first paint: that page, plus the six whole-set queries behind the tiles and the charts | 177 (168 answered 206) | 6.18 MB | **42.1%** |
 | One filtered query (`arr_delay >= 60`) and everything it recomputes | 214 (206 answered 206) | 7.53 MB | **51.3%** |
+| Re-sorting the whole file by arrival delay and fetching the first page of that order | 366 (364 answered 206) | 13.07 MB | **89.1%** |
 
-Not one whole-file `GET` in any of them.
+Not one whole-file `GET` in any of them — the check asserts that, not merely that some requests were 206.
 
-Measured 2026-09-16 by `tools/serve.mjs` during a headless-Chrome run, and kept in
-[`data/range-measurement.json`](data/range-measurement.json), which the published page falls back to.
-`node tools/verify.mjs --record` re-measures and rewrites it.
+Measured 2026-09-16 by `tools/serve.mjs`, which records every request for a file under `data/`, and written to
+[`data/range-measurement.json`](data/range-measurement.json) by `node tools/verify.mjs --record`. The published page
+falls back to it and says so.
 
-Those three numbers are very different, and all three are quoted. Paging the table is nearly
-free: the engine reads the footer, the metadata, and the column chunks of one row group — 66 KB
-to open a 14.67 MB file and put 200 rows on screen. The whole-set statistics cost far more,
-because a `quantile_cont` over every matching row has to read that column across all twelve row
-groups. That is the trade this demo is actually making, and quoting only the first number would
-be the flattering third of it.
+All four numbers are quoted because they are wildly different and the cheap one alone would be the flattering
+quarter of the truth. Paging the table is cheap: one row group's column chunks. The whole-set statistics cost more,
+because a `quantile_cont` over every matching row has to read that column from all twelve row groups. And a **global
+sort is the expensive one** — an `ORDER BY` over 607,577 rows reads that column out of every row group and then
+fetches the page, which is 89% of the file. That is the real shape of the trade, not a slogan.
 
-What the sort and the row groups buy is pruning: a filter on `flight_date` can only touch the
-groups whose recorded min/max fail to rule it out, and on a file sorted by date that is a handful
-of the twelve rather than all of them.
+What the sort and the row groups buy is pruning: a filter on `flight_date` can only touch the groups whose recorded
+min/max fail to rule it out, and on a file sorted by date that is a handful of the twelve rather than all of them.
 
 The published site is GitHub Pages, which answers `206 Partial Content` the same
 way; `node tools/verify.mjs --live` asks it for a byte range and checks that it
@@ -98,7 +97,8 @@ So nothing here is reduced from the loaded page:
 `tools/verify.mjs` recomputes every one of those figures with a **second
 DuckDB, in Node**, against the same file, with SQL written out independently,
 and fails the build if the page and Node disagree — tile by tile, carrier by
-carrier, hour by hour, bucket by bucket, day by day.
+carrier, hour by hour, bucket by bucket, day by day. It is 65 checks, and they
+all pass; the last run is quoted in the range table above.
 
 ---
 

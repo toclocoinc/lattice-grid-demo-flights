@@ -10,7 +10,15 @@
     "percentOfFile": 42.1
   },
   "pageOnly": {
-    "label": "one more page of rows and its count, after a sort — no whole-set queries",
+    "label": "one more page of rows and its count, unsorted — no whole-set queries",
+    "requests": 38,
+    "partial": 36,
+    "head": 2,
+    "bytes": 1262303,
+    "percentOfFile": 8.2
+  },
+  "sorted": {
+    "label": "re-sorting the whole file by arrival delay and fetching the first page of that order",
     "requests": 366,
     "partial": 364,
     "head": 2,
