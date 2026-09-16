@@ -108,6 +108,15 @@ export function startServer(port = 0) {
       return;
     }
 
+    /* A browser asks for /favicon.ico whatever the page says, and a 404 for it
+       lands in the console as an error. The page declares an empty data: icon,
+       so there is nothing to serve and nothing to complain about: answer 204.
+       Only this one path, so a genuinely missing asset still 404s loudly. */
+    if (url === '/favicon.ico') {
+      response.writeHead(204, { 'cache-control': 'no-store' }).end();
+      return;
+    }
+
     let file = resolvePath(url);
     if (!file) {
       response.writeHead(403).end('Forbidden');
