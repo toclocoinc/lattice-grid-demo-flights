@@ -5,7 +5,7 @@
   "type": "module",
   "license": "MIT",
   "dependencies": {
-    "@toclocoinc/lattice-grid": "^1.62.1"
+    "@toclocoinc/lattice-grid": "^1.63.0"
   },
   "engines": {
     "node": ">=22"

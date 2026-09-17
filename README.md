@@ -189,7 +189,7 @@ The page loads the grid straight out of `node_modules`, which is why
 `node_modules` is published to Pages rather than being a build input.
 
 `npm install` fetches exactly one runtime dependency — `@toclocoinc/lattice-grid`
-at `^1.62.1` — and one development one, `@duckdb/node-api`, which only the
+at `^1.63.0` — and one development one, `@duckdb/node-api`, which only the
 data-build script and the verification script use. DuckDB-Wasm is not an npm
 dependency at all: the page imports it from jsDelivr at a pinned version,
 because the grid ships no engine and takes a connection the host made.
