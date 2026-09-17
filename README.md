@@ -21,8 +21,8 @@ needs — over HTTP, with `Range` headers. `LOAD httpfs;` is what puts that
 filesystem in play; without it DuckDB pulls the whole file in one GET before it
 can answer anything.
 
-Measured on a range-capable local server, by the server, because DuckDB reads
-inside a worker and nothing in the page can see those requests:
+Measured **on a local server**, by the server, because DuckDB reads inside a worker and nothing in the
+page can see those requests:
 
 | | HTTP requests | Bytes read | Share of the 14.67 MB file |
 |---|---|---|---|
@@ -32,6 +32,14 @@ inside a worker and nothing in the page can see those requests:
 | Re-sorting the whole file by arrival delay and fetching the first page of that order | 364 (362 answered 206) | 13.02 MB | **88.7%** |
 
 Not one whole-file `GET` in any of them — the check asserts that, not merely that some requests were 206.
+
+**On GitHub Pages the same first paint reads less: 99 requests, 3.03 MB, 20.7 % of the file, every one
+answered 206.** Not a different amount of work — a different cache. Pages sends `cache-control:
+max-age=600` and the local server sends `no-store`, so on Pages the browser answers DuckDB's repeat
+reads of the same byte ranges without going back to the wire; later queries in the same session can
+need nothing new at all. Both measurements are kept in
+[`data/range-measurement.json`](data/range-measurement.json), each labelled with its host, and the
+published page quotes the one taken on the host it is being served from.
 
 Measured 2026-09-16 by `tools/serve.mjs`, which records every request for a file under `data/`, and written to
 [`data/range-measurement.json`](data/range-measurement.json) by `node tools/verify.mjs --record`. The published page

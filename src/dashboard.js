@@ -726,36 +726,68 @@ export function buildDashboard({
   /**
    * The range accounting.
    *
-   * Live from the local server when there is one; otherwise the measurement
-   * taken here and committed with the repository, clearly labelled as recorded
-   * rather than live. GitHub Pages answers 206 — the reads happen there too —
-   * it just keeps no log this page could read.
+   * Counted live where a server of ours is answering, because only the server
+   * can see a worker's requests. Everywhere else the committed measurement is
+   * quoted — and the one taken on THIS host where there is one, rather than a
+   * figure from somewhere else that would flatter or understate what a visitor
+   * actually pays. Either way the readout names the host it is quoting.
    */
   async function renderRanges(recorded) {
     const live = await readRangeAccounting();
     built.ranges = live;
     built.rangeSource = live ? 'live' : 'recorded';
     const file = live?.files?.find((f) => f.path.endsWith(DATA_FILE));
+    /*
+     * A phase that read nothing is not a phase that costs nothing.
+     *
+     * On a host that permits caching, a later query often needs no new bytes at
+     * all, because the ranges it wants were already fetched by an earlier one.
+     * That is true and worth saying — but printing "0 requests, 0 bytes, 0%"
+     * beside "one filtered query" would read as a claim that filtering is free,
+     * which a visitor arriving fresh would find untrue. So a zero says what it
+     * actually means.
+     */
+    const phase = (p) => (p.bytes === 0
+      ? '<b>nothing new</b> — the browser already held every range it needed'
+      : `<b>${fmt.int(p.requests)} requests, ${fmt.bytes(p.bytes)}</b> — ${p.percentOfFile}% of the file`);
+
     rangePanel.textContent = '';
     rangePanel.append(el('h3', null, 'What was actually read off the wire'));
     const body = el('p', 'range-body');
+
     if (file) {
+      /* A server of ours is answering, so it is counting: these are this page
+         load's own numbers, not a recorded figure. */
       body.innerHTML =
-        `<b>${fmt.int(file.requests)} requests</b>, ${fmt.int(file.partial)} of them answered 206 Partial Content, `
+        `<b>On this host</b> (${location.host}), the first paint took `
+        + `<b>${fmt.int(file.requests)} requests</b>, ${fmt.int(file.partial)} of them answered 206 Partial Content, `
         + `<b>${fmt.bytes(file.bytes)} of ${fmt.bytes(file.size)}</b> — ${file.percentOfFile}% of the file. `
         + 'Counted by the server that served it, because DuckDB reads inside a worker and nothing in this page can see those requests.';
       rangePanel.dataset.rangeSource = 'live';
-    } else if (recorded) {
-      const phase = (p) => `<b>${fmt.int(p.requests)} requests, ${fmt.bytes(p.bytes)}</b> — ${p.percentOfFile}% of the file`;
+      rangePanel.dataset.rangeHost = location.host;
+    } else if (recorded?.hosts) {
+      /*
+       * No server of ours here, so quote the recorded measurement — and quote
+       * the one taken on THIS host where there is one, rather than a local
+       * figure that flatters or understates what a visitor actually pays.
+       */
+      const onPages = /github\.io$/.test(location.hostname);
+      const mine = (onPages && recorded.hosts.pages) ? recorded.hosts.pages : (recorded.hosts.local ?? recorded.hosts.pages);
+      const other = mine === recorded.hosts.pages ? recorded.hosts.local : recorded.hosts.pages;
+      const size = recorded.size;
       body.innerHTML =
-        `Recorded on a local server running this same code, against this same file (${fmt.bytes(recorded.size)}). `
+        `<b>Measured on ${mine.name}</b> on ${mine.measuredOn}, against this same ${fmt.bytes(size)} file. `
         + `The first paint — a page of rows, the count, and the six whole-set queries behind the tiles and charts — took `
-        + `${phase(recorded.firstPaint)}. `
-        + (recorded.pageOnly ? `One more page of rows, unsorted, took ${phase(recorded.pageOnly)}. ` : '')
-        + (recorded.sorted ? `Re-sorting the whole file by arrival delay took ${phase(recorded.sorted)} — an ORDER BY over 607,577 rows has to read that column out of every row group. ` : '')
-        + `One filtered query (${recorded.filtered.query}) took ${phase(recorded.filtered)}. `
-        + 'GitHub Pages answers 206 too, so the same reads happen here; it just keeps no log this page can read.';
+        + `${phase(mine.firstPaint)}. `
+        + (mine.filtered ? `One filtered query (${mine.filtered.query}) took ${phase(mine.filtered)}. ` : '')
+        + (mine.sorted ? `Re-sorting the whole file by arrival delay took ${phase(mine.sorted)} — an ORDER BY over 607,577 rows has to read that column out of every row group. ` : '')
+        + `Counted by ${mine.countedBy}.`
+        + (other
+          ? `<br><span class="range-contrast">For contrast, the same first paint on ${other.name} read `
+            + `${phase(other.firstPaint)}. ${recorded.note}</span>`
+          : '');
       rangePanel.dataset.rangeSource = 'recorded';
+      rangePanel.dataset.rangeHost = mine.name;
     } else {
       body.textContent = 'No measurement available.';
       rangePanel.dataset.rangeSource = 'none';

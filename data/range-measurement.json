@@ -1,39 +1,88 @@
 {
   "file": "data/flights-2026-06.zip",
   "size": 15383215,
-  "firstPaint": {
-    "label": "the first paint: a page of rows, the count, and the six whole-set queries behind the tiles and the charts",
-    "requests": 177,
-    "partial": 168,
-    "head": 9,
-    "bytes": 6481736,
-    "percentOfFile": 42.1
+  "hosts": {
+    "local": {
+      "name": "a local server (tools/serve.mjs)",
+      "measuredOn": "2026-09-17",
+      "countedBy": "the server that served the file, which is the only thing that can see a worker's requests",
+      "firstPaint": {
+        "label": "the first paint: a page of rows, the count, and the six whole-set queries behind the tiles and the charts",
+        "requests": 177,
+        "partial": 168,
+        "head": 9,
+        "bytes": 6481736,
+        "percentOfFile": 42.1
+      },
+      "pageOnly": {
+        "label": "returning to the unsorted order after a sort — what a page costs when the engine already holds the row groups",
+        "requests": 2,
+        "partial": 0,
+        "head": 2,
+        "bytes": 0,
+        "percentOfFile": 0
+      },
+      "sorted": {
+        "label": "re-sorting the whole file by arrival delay and fetching the first page of that order",
+        "requests": 364,
+        "partial": 362,
+        "head": 2,
+        "bytes": 13651056,
+        "percentOfFile": 88.7
+      },
+      "filtered": {
+        "label": "one filtered query: arr_delay >= 60, its count, and the whole-set queries again",
+        "requests": 176,
+        "partial": 168,
+        "head": 8,
+        "bytes": 6208604,
+        "percentOfFile": 40.4,
+        "query": "arr_delay >= 60"
+      }
+    },
+    "pages": {
+      "name": "GitHub Pages",
+      "url": "https://toclocoinc.github.io/lattice-grid-demo-flights",
+      "measuredOn": "2026-09-17",
+      "countedBy": "the browser's own network log, the DuckDB worker's requests included — there is no server of ours in the path",
+      "firstPaint": {
+        "label": "the first paint: a page of rows, the count, and the six whole-set queries behind the tiles and the charts",
+        "requests": 99,
+        "partial": 99,
+        "whole": 0,
+        "head": 9,
+        "bytes": 3180287,
+        "percentOfFile": 20.7
+      },
+      "pageOnly": {
+        "label": "returning to the unsorted order after a sort — what a page costs when the engine already holds the row groups",
+        "requests": 0,
+        "partial": 0,
+        "whole": 0,
+        "head": 2,
+        "bytes": 0,
+        "percentOfFile": 0
+      },
+      "sorted": {
+        "label": "re-sorting the whole file by arrival delay and fetching the first page of that order",
+        "requests": 275,
+        "partial": 275,
+        "whole": 0,
+        "head": 2,
+        "bytes": 10638758,
+        "percentOfFile": 69.2
+      },
+      "filtered": {
+        "label": "one filtered query: arr_delay >= 60, its count, and the whole-set queries again",
+        "requests": 0,
+        "partial": 0,
+        "whole": 0,
+        "head": 8,
+        "bytes": 0,
+        "percentOfFile": 0,
+        "query": "arr_delay >= 60"
+      }
+    }
   },
-  "pageOnly": {
-    "label": "returning to the unsorted order after a sort \u2014 the engine already held those row groups, so this is what a page costs when nothing new has to be read",
-    "requests": 2,
-    "partial": 0,
-    "head": 2,
-    "bytes": 0,
-    "percentOfFile": 0
-  },
-  "sorted": {
-    "label": "re-sorting the whole file by arrival delay and fetching the first page of that order",
-    "requests": 364,
-    "partial": 362,
-    "head": 2,
-    "bytes": 13651056,
-    "percentOfFile": 88.7
-  },
-  "filtered": {
-    "label": "one filtered query: arr_delay >= 60, its count, and the whole-set queries again",
-    "requests": 176,
-    "partial": 168,
-    "head": 8,
-    "bytes": 6208604,
-    "percentOfFile": 40.4,
-    "query": "arr_delay >= 60"
-  },
-  "measuredOn": "2026-09-16",
-  "note": "Measured by tools/serve.mjs, which records every request for a file under data/. GitHub Pages answers 206 the same way."
+  "note": "The two hosts differ because GitHub Pages permits caching (cache-control: max-age=600) while the local server sends no-store, so on Pages the browser answers DuckDB's repeat reads of the same byte ranges without going back to the wire. Neither figure is a whole-file download."
 }

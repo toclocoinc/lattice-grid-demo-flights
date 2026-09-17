@@ -202,6 +202,43 @@ async function nodeAnswers(filterSql) {
   };
 }
 
+/**
+ * Write one host's measurement into data/range-measurement.json, keeping the
+ * other host's.
+ *
+ * Both are worth publishing, and the contrast is the interesting part: the same
+ * work against a local server and against the published host reads different
+ * amounts, because an edge cache and a `cache-control` that permits reuse mean
+ * the browser answers DuckDB's repeat reads of the same byte ranges without
+ * going back to the wire. Replacing one with the other would throw away the
+ * comparison, so this merges.
+ */
+async function recordMeasurement({ host, url, phases }, size) {
+  const file = join(root, 'data', 'range-measurement.json');
+  let existing = {};
+  try { existing = JSON.parse(await readFile(file, 'utf8')); } catch { /* first time */ }
+  const hosts = (existing.hosts && typeof existing.hosts === 'object') ? existing.hosts : {};
+  hosts[host] = {
+    name: host === 'pages' ? 'GitHub Pages' : 'a local server (tools/serve.mjs)',
+    ...(url ? { url } : {}),
+    measuredOn: new Date().toISOString().slice(0, 10),
+    countedBy: host === 'pages'
+      ? "the browser's own network log, the DuckDB worker's requests included — there is no server of ours in the path"
+      : 'the server that served the file, which is the only thing that can see a worker\'s requests',
+    ...phases,
+  };
+  const out = {
+    file: PARQUET,
+    size,
+    hosts,
+    note: 'The two hosts differ because GitHub Pages permits caching (cache-control: max-age=600) '
+      + 'while the local server sends no-store, so on Pages the browser answers DuckDB\'s repeat reads '
+      + 'of the same byte ranges without going back to the wire. Neither figure is a whole-file download.',
+  };
+  await writeFile(file, `${JSON.stringify(out, null, 2)}\n`);
+  console.log(`  written to data/range-measurement.json (hosts: ${Object.keys(hosts).join(', ')})`);
+}
+
 /* ------------------------------------------------------------------ */
 /* The browser                                                         */
 /* ------------------------------------------------------------------ */
@@ -503,6 +540,7 @@ async function run() {
       groupDisabled: !!(document.querySelector('[data-group]') || {}).disabled,
       rangeText: (document.querySelector('[data-range]') || {}).textContent || '',
       rangeSource: (document.querySelector('[data-range]') || {}).dataset ? document.querySelector('[data-range]').dataset.rangeSource : null,
+      rangeHost: (document.querySelector('[data-range]') || {}).dataset ? document.querySelector('[data-range]').dataset.rangeHost : null,
       charts: { dist: chart('dist'), carrier: chart('carrier'), hour: chart('hour'), routes: chart('routes'), daily: chart('daily') },
       chartRows: { dist: rowsOf('dist'), carrier: rowsOf('carrier'), hour: rowsOf('hour'), routes: rowsOf('routes'), daily: rowsOf('daily') },
       carrierRows: readRows('carrier', ['carrier', 'flights', 'median', 'p95']),
@@ -644,10 +682,12 @@ async function run() {
    * first, measure; then clear the sort, measure that on its own.
    */
   served?.reset();
+  wireEntries = [];
   await evaluate("window.__flightsDemo.grid.sort.set([{ col: 'arr_delay', dir: 'desc' }])");
   await sleep(4000);
   const sortRanges = served ? served.ranges() : null;
   const sortFile = sortRanges?.files?.find((f) => f.path.endsWith(DATA_FILE)) ?? null;
+  const sortWire = wireEntries.slice();
   const sorted = await evaluate(`(() => {
     const d = window.__flightsDemo;
     const first = [];
@@ -658,10 +698,12 @@ async function run() {
   check(/ORDER BY/.test(sorted.sql), 'and appears as ORDER BY in the plan panel');
 
   served?.reset();
+  wireEntries = [];
   await evaluate("window.__flightsDemo.grid.sort.set([])");
   await sleep(4000);
   const pageRanges = served ? served.ranges() : null;
   const pageFile = pageRanges?.files?.find((f) => f.path.endsWith(DATA_FILE)) ?? null;
+  const pageWire = wireEntries.slice();
   if (pageFile && sortFile) {
     check(pageFile.bytes < sortFile.bytes,
       'an unsorted page costs far less than a re-sort of the whole file',
@@ -673,6 +715,7 @@ async function run() {
   /* ---------------------------------------------------------------- */
 
   served?.reset();
+  wireEntries = [];
   consoleErrors = [];
   pageErrors = [];
   await evaluate("window.__flightsDemo.togglePreset('late60')");
@@ -681,6 +724,7 @@ async function run() {
 
   const filteredRanges = served ? served.ranges() : null;
   const filteredFile = filteredRanges?.files?.find((f) => f.path.endsWith(DATA_FILE)) ?? null;
+  const filteredWire = wireEntries.slice();
 
   const filtered = await evaluate(`(() => {
     const d = window.__flightsDemo;
@@ -793,22 +837,49 @@ async function run() {
   let measurement = null;
 
   if (live) {
-    /* The byte accounting, as the BROWSER saw it against Pages. */
-    const parquetWire = firstPaintWire.filter((e) => e.method !== 'HEAD');
-    const partial = parquetWire.filter((e) => e.status === 206);
-    const whole = parquetWire.filter((e) => e.status === 200);
-    const withRange = parquetWire.filter((e) => e.range);
-    const bytes = parquetWire.reduce((sum, e) => sum + (e.bytes || 0), 0);
-    const share = Number(((bytes / size) * 100).toFixed(1));
+    /*
+     * The byte accounting, as the BROWSER saw it against the published host.
+     *
+     * There is no server of ours in the path, so the count comes from the
+     * browser's own network log — including the DuckDB worker's requests, which
+     * is why the worker target is auto-attached. Same phases as the local run,
+     * measured the same way, so the two are comparable.
+     */
+    const fromWire = (entries, label) => {
+      const real = entries.filter((e) => e.method !== 'HEAD');
+      const partial = real.filter((e) => e.status === 206).length;
+      const whole = real.filter((e) => e.status === 200).length;
+      const bytes = real.reduce((sum, e) => sum + (e.bytes || 0), 0);
+      return {
+        label,
+        requests: real.length,
+        partial,
+        whole,
+        head: entries.length - real.length,
+        bytes,
+        percentOfFile: Number(((bytes / size) * 100).toFixed(1)),
+      };
+    };
+    const livePhases = {
+      firstPaint: fromWire(firstPaintWire, 'the first paint: a page of rows, the count, and the six whole-set queries behind the tiles and the charts'),
+      pageOnly: fromWire(pageWire, 'returning to the unsorted order after a sort — what a page costs when the engine already holds the row groups'),
+      sorted: fromWire(sortWire, 're-sorting the whole file by arrival delay and fetching the first page of that order'),
+      filtered: { ...fromWire(filteredWire, 'one filtered query: arr_delay >= 60, its count, and the whole-set queries again'), query: 'arr_delay >= 60' },
+    };
+    const first = livePhases.firstPaint;
+    const withRange = firstPaintWire.filter((e) => e.range).length;
+    const line = (name, p) => `  ${name.padEnd(22)} ${String(p.requests).padStart(4)} requests, ${String(p.partial).padStart(4)} answered 206, `
+      + `${String(p.whole).padStart(2)} answered 200, ${mb(p.bytes).padStart(9)} of ${mb(size)} = ${String(p.percentOfFile).padStart(5)}% of the file`;
     console.log('\nRange reads against the published host, as the browser reported them:');
-    console.log(`  first paint             ${parquetWire.length} requests for the Parquet file, `
-      + `${withRange.length} carried a Range header, ${partial.length} answered 206, ${whole.length} answered 200, `
-      + `${mb(bytes)} of ${mb(size)} = ${share}% of the file`);
-    check(parquetWire.length > 0, 'the live page fetched the Parquet file', `${parquetWire.length} requests`);
-    check(partial.length > 0, 'and Pages answered them with 206 Partial Content', `${partial.length} of ${parquetWire.length}`);
-    check(whole.length === 0, 'with no whole-file GET', `${whole.length} responses were 200`);
-    check(bytes < size, 'so the live first paint did NOT download the file', `${mb(bytes)} of ${mb(size)} — ${share}%`);
-    measurement = { live: true, url: origin, size, firstPaint: { requests: parquetWire.length, partial: partial.length, bytes, percentOfFile: share } };
+    console.log(line('first paint', first) + ` (${withRange} carried a Range header)`);
+    console.log(line('page, already held', livePhases.pageOnly));
+    console.log(line('re-sort whole file', livePhases.sorted));
+    console.log(line('arr_delay >= 60', livePhases.filtered));
+    check(first.requests > 0, 'the live page fetched the Parquet file', `${first.requests} requests`);
+    check(first.partial > 0, 'and Pages answered them with 206 Partial Content', `${first.partial} of ${first.requests}`);
+    check(first.whole === 0, 'with no whole-file GET', `${first.whole} responses were 200`);
+    check(first.bytes < size, 'so the live first paint did NOT download the file', `${mb(first.bytes)} of ${mb(size)} — ${first.percentOfFile}%`);
+    measurement = { host: 'pages', url: origin, phases: livePhases };
 
     /*
      * And ask the host directly, the way a browser does.
@@ -872,6 +943,7 @@ async function run() {
       `${head.headers.get('content-length')} against ${size}`);
     /* Pages has no /__ranges endpoint, so the page must fall back to the
        recorded measurement rather than showing nothing. */
+    if (record) await recordMeasurement(measurement, size);
     check(shown.rangeSource === 'recorded',
       'the live page falls back to the recorded byte measurement', String(shown.rangeSource));
     check(/of the file/.test(shown.rangeText), 'and shows it', shown.rangeText.slice(0, 90));
@@ -895,17 +967,16 @@ async function run() {
         percentOfFile: file.percentOfFile,
       });
       measurement = {
-        file: PARQUET,
-        size,
-        firstPaint: phase(firstPaintFile, 'the first paint: a page of rows, the count, and the six whole-set queries behind the tiles and the charts'),
-        pageOnly: pageFile ? phase(pageFile, 'returning to the unsorted order after a sort — the engine already held those row groups, so this is what a page costs when nothing new has to be read') : null,
-        sorted: sortFile ? phase(sortFile, 're-sorting the whole file by arrival delay and fetching the first page of that order') : null,
-        filtered: {
-          ...phase(filteredFile, 'one filtered query: arr_delay >= 60, its count, and the whole-set queries again'),
-          query: 'arr_delay >= 60',
+        host: 'local',
+        phases: {
+          firstPaint: phase(firstPaintFile, 'the first paint: a page of rows, the count, and the six whole-set queries behind the tiles and the charts'),
+          pageOnly: pageFile ? phase(pageFile, 'returning to the unsorted order after a sort — what a page costs when the engine already holds the row groups') : null,
+          sorted: sortFile ? phase(sortFile, 're-sorting the whole file by arrival delay and fetching the first page of that order') : null,
+          filtered: {
+            ...phase(filteredFile, 'one filtered query: arr_delay >= 60, its count, and the whole-set queries again'),
+            query: 'arr_delay >= 60',
+          },
         },
-        measuredOn: new Date().toISOString().slice(0, 10),
-        note: 'Measured by tools/serve.mjs, which records every request for a file under data/. GitHub Pages answers 206 the same way.',
       };
       const line = (name, file) => `  ${name.padEnd(22)} ${String(file.requests).padStart(4)} requests, ${String(file.partial).padStart(4)} answered 206, `
         + `${String(file.head ?? 0).padStart(2)} HEAD, ${mb(file.bytes).padStart(9)} of ${mb(size)} = ${String(file.percentOfFile).padStart(5)}% of the file`;
@@ -914,14 +985,13 @@ async function run() {
       if (pageFile) console.log(line('page, already held', pageFile));
       if (sortFile) console.log(line('re-sort whole file', sortFile));
       console.log(line('arr_delay >= 60', filteredFile));
-      if (record) {
-        await writeFile(join(root, 'data', 'range-measurement.json'), `${JSON.stringify(measurement, null, 2)}\n`);
-        console.log('  written to data/range-measurement.json');
-      }
+      if (record) await recordMeasurement(measurement, size);
     }
     /* The page's own readout should be the live one when a server is answering. */
     check(shown.rangeSource === 'live', 'the page read the byte accounting from the server', String(shown.rangeSource));
     check(/of the file/.test(shown.rangeText), 'and shows it', shown.rangeText.slice(0, 90));
+    check(/^On this host/.test(shown.rangeText.trim().replace(/^What was actually read off the wire/, '')),
+      'and says which host it is quoting', shown.rangeText.slice(0, 60));
   }
 
   return measurement;

@@ -154,7 +154,8 @@ body {
   font-size: 10.5px; letter-spacing: 0.1em; text-transform: uppercase;
   color: var(--ink-3); margin: 0 0 6px;
 }
-.range-body { margin: 0; font-size: 13px; color: var(--ink-2); max-width: 90ch; }
+.range-body { margin: 0; font-size: 13px; color: var(--ink-2); max-width: 96ch; }
+.range-contrast { display: block; margin-top: 7px; color: var(--ink-3); }
 
 /* ----------------------------------------------------------- charts */
 
