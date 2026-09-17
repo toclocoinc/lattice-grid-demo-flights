@@ -514,10 +514,9 @@ export function buildDashboard({
    * It is drawn as a bar chart of counts rather than with the charts module's
    * `histogram` type, and that is a deliberate choice, not a shortcut: a
    * histogram bins raw readings, so it would need every matching arrival delay
-   * in the browser — the download this whole demo exists to avoid — and at this
-   * size the type currently throws (see the README, F-FLT-1). What is drawn is
-   * the exact distribution of every matching flight, which is the stronger
-   * claim anyway.
+   * in the browser — the download this whole demo exists to avoid. What is
+   * drawn is the exact distribution of every matching flight, which is the
+   * stronger claim anyway.
    */
   function feedDistribution(groups) {
     const buckets = new Map();
@@ -552,11 +551,8 @@ export function buildDashboard({
    * Arrival delay by carrier.
    *
    * The five-number summary is DuckDB's, per carrier, over the whole matching
-   * set. It is drawn as a bar of the median rather than as a box plot: the
-   * charts module's `boxplot` scales its measure axis to the per-category
-   * *sum* in 1.62.1, which puts every box off the top of the plot (see the README,
-   * F-FLT-2, the same defect as the grid's own F-1329-1). A chart that cannot
-   * be drawn correctly is not drawn incorrectly here.
+   * set. It is drawn as a bar of the median: the summary comes from the engine
+   * as five numbers per carrier, and one bar per carrier reads at a glance.
    */
   function feedCarriers(groups) {
     const rows = realGroups(groups)
