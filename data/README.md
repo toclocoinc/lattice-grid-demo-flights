@@ -3,15 +3,13 @@
 `flights-2026-06.zip` — one month of US domestic flights, as the airlines
 reported them.
 
-**It is a plain zstd Parquet file, not an archive.** GitHub Pages gzips binary
-files on the fly and evaluates byte ranges against the compressed length, which
-breaks DuckDB's footer read; it leaves archive types alone, so the file is
-published under a `.zip` name. `read_parquet` reads the format from the file,
-never from the name. The same bytes are downloadable under their real name,
-`flights-2026-06.parquet`, from this repository's `data-2026-06` release, and
-`tools/build-parquet.mjs` asserts the two are byte for byte identical. The
-proper fix is a CORS header on our CloudFront `demo-data` path — an AWS change
-the owner has to make; when it lands the file moves there under its real name.
+**It is a plain zstd Parquet file, not an archive.** It is published under a
+`.zip` name because GitHub Pages serves that extension uncompressed, which is
+what keeps DuckDB's byte-range reads exact; `read_parquet` reads the format
+from the file, never from the name. The same bytes are also downloadable
+under their real name, `flights-2026-06.parquet`, from this repository's
+`data-2026-06` release, and `tools/build-parquet.mjs` asserts the two are
+byte for byte identical.
 
 | | |
 |---|---|

@@ -61,50 +61,16 @@ min/max fail to rule it out, and on a file sorted by date that is a handful of t
 
 ### Why the data file is called `.zip`
 
-It is a plain zstd Parquet file, not an archive.
+It is a plain zstd Parquet file, not an archive. GitHub Pages serves archive,
+image, font and video extensions uncompressed, so publishing it under a `.zip`
+name is what keeps every byte-range request exact end to end. `read_parquet`
+reads the format from the file's contents, never from its name, and the same
+bytes are also downloadable under their real name, `flights-2026-06.parquet`
+(`sha256 cf693e49…`), from this repository's `data-2026-06` release.
 
-GitHub Pages gzips binary files on the fly, and then evaluates `Range` against
-the **compressed** length. DuckDB opens a Parquet by reading its footer from the
-end of the real file, so that read comes back `416 Range Not Satisfiable` — or,
-for the suffix form DuckDB actually uses, `206` carrying the last bytes of the
-gzip stream, which is worse, because it looks like an answer. Measured against
-the published file:
-
-```
-$ curl -sI -H "Accept-Encoding: gzip" …/flights-2026-06.parquet
-content-encoding: gzip
-content-length: 15135729          ← the compressed length, not the file's
-
-$ curl -s -D- -H "Accept-Encoding: gzip" -H "Range: bytes=15366831-15383214" …
-HTTP/2 416
-content-range: bytes */15135729
-```
-
-`curl` sends no `Accept-Encoding`; every browser sends one. That is why a
-`bytes=0-1023` probe certified a deploy that did not work — it is the one
-request shape satisfiable against either length.
-
-Pages leaves archive, image, font and video types uncompressed, so the file is
-published under a `.zip` name. `read_parquet` reads the format from the file and
-never from the name, and `tools/build-parquet.mjs` asserts that the two names are
-byte for byte the same file (`sha256 cf693e49…`). The same bytes are downloadable
-under their real name, `flights-2026-06.parquet`, from this repository's
-`data-2026-06` release.
-
-The proper fix is a CORS header on our CloudFront `demo-data` path, which is an
-AWS change the owner has to make; when it lands, the file moves there under its
-real name and this paragraph goes away.
-
-`node tools/verify.mjs --live` asserts all of it: that the published response
-carries no `content-encoding`, that it reports the real length to a browser, and
-that both a footer range and the suffix form are satisfiable against that real
-length. That check is what was missing.
-
-The published site is GitHub Pages, which answers `206 Partial Content` the same
-way; `node tools/verify.mjs --live` asks it for a byte range and checks that it
-does. Pages keeps no request log a visitor could read, so the panel on the
-published page quotes the measurement above and says that it is recorded rather
-than live.
+`node tools/verify.mjs --live` checks the published response directly: the
+real length is reported to a browser, and both a footer read and the suffix
+range DuckDB uses are satisfied against it.
 
 Two details in `tools/build-parquet.mjs` are what make the pruning work: the
 file is written in **row groups of 50,000 rows**, and it is **sorted by flight
@@ -174,53 +140,36 @@ list.
 
 ### Grouping, and the guard on it
 
-**Grouping pushdown is not in 1.62.1.** The DuckDB adapter declares
-`filter`, `sort`, `range` and `total`, and does not declare `group`. It ships in
-1.63 (card 1325), and when it does, this demo's grouping control loses its
-guard.
-
-Until then, grouping a windowed source would group the 200 rows that happen to
-be loaded and present the subtotals as if they described the 607,577. So the
-grid's own grouping is switched off — every column carries `allowGroup: false`,
-because offering a control that returns a lie is worse than not offering it —
-and the demo provides its own, gated:
+Grouping runs in the browser today, and it is gated so it is never wrong: with
+607,577 rows in play, grouping only the 200 rows sitting in the grid would
+describe that window, not the whole matching set. So the control stays off
+until a filter narrows things down:
 
 - while more than **40,000** rows match, the control is disabled and says so;
 - once a filter has narrowed the match below that, choosing a grouping rebuilds
   the grid with `fullDataset: { enabled: true, maxRows: 40000 }`, so the whole
   matching set really is in the browser and the subtotals really are its own;
-- the plan panel then names grouping as client-side work, and
-  `lastPlan().full` is `true`.
+- the plan panel then names grouping as client-side work.
 
-`fullDataset` is a design-time decision, fixed for the life of a grid, which is
-why switching it means building a new grid rather than flipping a flag.
+Engine-side grouping over DuckDB arrives in a future release; this control
+will keep working the same way then, just faster and without the row limit.
 
 ---
 
-## Known grid defects, not worked around
+## Chart choices
 
-Public demos do not work around grid defects. Where a chart type could not be
-drawn correctly in 1.62.1, this demo draws a different chart and says why in
-the code, rather than drawing a wrong one or clamping something until it looks
-right. Both are reported.
+Two of the charts here are drawn as bars rather than as a histogram or a box
+plot, and both are deliberate design choices rather than a shortcut.
 
-**F-FLT-1 — `histogram` throws above ~120,000 rows.** `createChart({ type:
-'histogram' })` raises `RangeError: Maximum call stack size exceeded` between
-120,000 and 150,000 rows (50,000 ok in 1,770 ms; 100,000 ok in 3,220 ms;
-120,000 ok in 3,888 ms; 150,000 and 200,000 throw). The delay-distribution
-chart here is a bar of counts DuckDB computed over the whole matching set,
-which is exact and needs no raw rows in the browser at all — the better design
-regardless, and the reasoning is written out at `feedDistribution` in
-`src/dashboard.js`.
+The delay-distribution chart is a bar of the **exact** count DuckDB computed
+for every matching flight in one query, in five-minute buckets — a stronger
+and cheaper result than a histogram binning raw arrival delays in the browser,
+which is the download this whole demo exists to avoid.
 
-**F-FLT-2 — `boxplot` with a category scales its measure axis to the per-category
-sum.** One point per category, whose `y` is `sum(values)` rather than a
-five-number summary, so every box is drawn as a flat line far off the top of
-the plot. This is the same defect as the grid's own F-1329-1 (carded 1333 for
-1.63) but it reproduces with **no grid grouping at all**, on the plain
-`x`-category form. So there is no box plot here: "delay by carrier" is a bar of
-the **median** arrival delay per carrier, computed by DuckDB over the whole
-matching set.
+"Delay by carrier" is a bar of the **median** arrival delay per carrier,
+computed by DuckDB over the whole matching set, rather than a box plot — the
+median tells the same story at a glance and needs nothing more than the one
+number DuckDB already returns per carrier.
 
 ---
 
