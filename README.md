@@ -265,3 +265,6 @@ The demo code is MIT. The data is a work of the US government and is in the
 public domain. Lattice Grid itself is commercial software; the key in
 `src/licence.js` is bound to `toclocoinc.github.io` and does nothing anywhere
 else. Running this repository on your own machine needs no key at all.
+
+---
+Built with [Lattice Grid](https://www.latticegrid.dev), a JavaScript data grid with a Data Router: one live feed keeps grids, charts, boards, Gantt and KPI tiles in step. [Documentation](https://www.latticegrid.dev/docs/) · [Demos](https://www.latticegrid.dev/demos/) · [Licence](https://www.latticegrid.dev/licence/)
